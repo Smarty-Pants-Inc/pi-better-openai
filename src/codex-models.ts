@@ -4,8 +4,7 @@ import {
   type Provider,
   type RefreshModelsContext,
 } from "@earendil-works/pi-ai";
-import { openAICodexResponsesApi } from "@earendil-works/pi-ai/api/openai-codex-responses.lazy";
-import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const CODEX_API = "openai-codex-responses" as const;
@@ -184,7 +183,11 @@ async function fetchCodexModels(
 export function createOpenAICodexProvider(
   options: CreateCodexProviderOptions = {},
 ): Provider<typeof CODEX_API> {
-  const builtIn = openaiCodexProvider();
+  // Use the loader-supported aggregate export and retain the host's native transport.
+  const builtIn = builtinProviders().find(
+    (provider): provider is Provider<typeof CODEX_API> => provider.id === CODEX_PROVIDER_ID,
+  );
+  if (!builtIn) throw new Error("The pi host does not provide OpenAI Codex");
   return createProvider({
     id: builtIn.id,
     name: builtIn.name,
@@ -194,7 +197,7 @@ export function createOpenAICodexProvider(
     models: appendMissingCodexModels(builtIn.getModels()),
     fetchModels: (context) => fetchCodexModels(context, options),
     filterModels: builtIn.filterModels,
-    api: openAICodexResponsesApi(),
+    api: builtIn,
   });
 }
 
