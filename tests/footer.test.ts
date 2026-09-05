@@ -370,6 +370,22 @@ describe("footer mode ownership", () => {
     expect(harness.setFooter).toHaveBeenLastCalledWith(undefined);
   });
 
+  test("status mode clears the Better OpenAI footer only after Better OpenAI installed it", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, "replace");
+    const harness = createHarness(cwd);
+
+    await emit(harness, "session_start");
+    expect(harness.setFooter).toHaveBeenCalledTimes(1);
+    expect(harness.setFooter).toHaveBeenLastCalledWith(expect.any(Function));
+
+    writeProjectConfig(cwd, "status");
+    await emit(harness, "session_start");
+
+    expect(harness.setFooter).toHaveBeenCalledTimes(2);
+    expect(harness.setFooter).toHaveBeenLastCalledWith(undefined);
+  });
+
   test("off mode does not clear a footer after Better OpenAI's footer was disposed", async () => {
     const cwd = createTempProject();
     writeProjectConfig(cwd, "replace");
