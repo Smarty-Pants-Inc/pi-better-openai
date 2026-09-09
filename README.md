@@ -26,6 +26,7 @@ Usage display, image generation, and live voice require pi's `openai-codex` OAut
 2. Verify subscription usage with `/openai-usage`, or open `/openai-settings` and check **Diagnostics**.
 3. The extension reads auth from pi's agent auth store, normally `~/.pi/agent/auth.json`. Do not copy, paste, or commit values from this file.
 4. If `PI_CODING_AGENT_DIR` is set, the auth store, global extension config, and global generated-image directory use that agent directory instead of `~/.pi/agent`. A leading `~/` is expanded to your home directory.
+5. When [pi-multiprovider](https://github.com/monotykamary/pi-multiprovider) pools several `openai-codex` accounts, the session's active account (chosen with `/switch-account`) is resolved first for usage display, image generation, web search, and live voice; the usage widget refreshes on every switch. Without that extension, credential resolution is unchanged.
 
 ## Features
 

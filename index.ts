@@ -15,6 +15,13 @@ import {
 import { registerOpenAICodexModels } from "./src/codex-models.ts";
 import { CONFIG_BASENAME, STATUS_KEY } from "./src/identity.ts";
 import {
+  CODEX_PROVIDER_ID,
+  isMultiproviderService,
+  MULTIPROVIDER_SERVICE_EVENT,
+  setActiveMultiproviderService,
+  type MultiproviderService,
+} from "./src/multiprovider.ts";
+import {
   formatTokens,
   redactDiagnosticValue,
   sanitizeStatusText,
@@ -227,6 +234,32 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   let cachedSessionName: string | undefined;
   const usageController = new UsageController(config, updateFooter);
   const petController = new PetFooterController(config, updateFooter, () => footerInstalled);
+  let multiproviderService: MultiproviderService | undefined;
+  let unsubscribeMultiprovider: (() => void) | undefined;
+  let multiproviderRefreshCtx: ExtensionContext | undefined;
+
+  // Follow pi-multiprovider's active pooled account for openai-codex. The
+  // event re-fires with the same stable object at load and session start; the
+  // identity check keeps the change subscription attached exactly once. When
+  // the extension is absent, nothing here activates and credential resolution
+  // keeps its standalone behavior.
+  if (typeof pi.events?.on === "function") {
+    pi.events.on(MULTIPROVIDER_SERVICE_EVENT, (value) => {
+      if (!isMultiproviderService(value) || value === multiproviderService) return;
+      unsubscribeMultiprovider?.();
+      multiproviderService = value;
+      setActiveMultiproviderService(value);
+      unsubscribeMultiprovider = value.onActiveAccountChanged(CODEX_PROVIDER_ID, (event) => {
+        void usageController.refresh(event.ctx, undefined, { force: true });
+        updateFooter(event.ctx);
+      });
+      const ctx = multiproviderRefreshCtx;
+      if (ctx) {
+        void usageController.refresh(ctx, undefined, { force: true });
+        updateFooter(ctx);
+      }
+    });
+  }
 
   function refresh(ctx: ExtensionContext): ResolvedConfig {
     cachedConfig = resolveConfig(ctx.cwd || process.cwd());
@@ -1261,6 +1294,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     invalidateContextUsage();
     invalidateSessionName();
+    multiproviderRefreshCtx = ctx;
     const nextConfig = refresh(ctx);
     fastController.initializeForSession(ctx, nextConfig, pi.getFlag(FLAG) === true);
     if (
@@ -1347,6 +1381,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   pi.on("session_shutdown", () => {
     invalidateContextUsage();
     invalidateSessionName();
+    multiproviderRefreshCtx = undefined;
     usageController.shutdown();
     petController.shutdown();
   });

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CODEX_PROVIDER_ID, getActiveMultiproviderService } from "./multiprovider.ts";
 import { piAgentDir } from "./paths.ts";
 
 export const AUTH_FILE = join(piAgentDir(), "auth.json");
@@ -10,8 +11,13 @@ export type CodexCredentials = {
   accountId: string;
 };
 
+export type CodexCredentialsContext = Pick<
+  ExtensionContext,
+  "modelRegistry" | "model" | "sessionManager"
+>;
+
 export type CodexCredentialsWithSource = CodexCredentials & {
-  source: "modelRegistry" | "authFile";
+  source: "multiprovider" | "modelRegistry" | "authFile";
 };
 
 function waitForSignal<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -118,11 +124,28 @@ export function readCodexAuth(): CodexCredentials | undefined {
 }
 
 export async function getCodexCredentials(
-  ctx?: Pick<ExtensionContext, "modelRegistry">,
+  ctx?: CodexCredentialsContext,
   signal?: AbortSignal,
 ): Promise<CodexCredentialsWithSource | undefined> {
   if (signal?.aborted) throw signal.reason ?? new Error("Operation was aborted.");
-  const registryRequest = ctx?.modelRegistry?.getApiKeyForProvider("openai-codex");
+  // A pooled account pinned for this session (pi-multiprovider /switch-account)
+  // wins over pi's own credential: subscription usage is per-account.
+  const multiprovider = getActiveMultiproviderService();
+  if (multiprovider && ctx) {
+    try {
+      const resolved = await waitForSignal(
+        multiprovider.resolveActiveAccountAuth(CODEX_PROVIDER_ID, ctx, signal),
+        signal,
+      );
+      const accountId = resolved ? extractAccountIdFromJwt(resolved.accessToken) : undefined;
+      if (resolved && accountId) {
+        return { accessToken: resolved.accessToken, accountId, source: "multiprovider" };
+      }
+    } catch {
+      // Fall back to pi-owned credential resolution.
+    }
+  }
+  const registryRequest = ctx?.modelRegistry?.getApiKeyForProvider(CODEX_PROVIDER_ID);
   const registryToken = registryRequest
     ? await waitForSignal(
         registryRequest.catch(() => undefined),
