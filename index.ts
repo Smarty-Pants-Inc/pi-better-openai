@@ -62,8 +62,6 @@ import {
   formatUsageSnapshot,
   parseUsageSnapshot,
   readCodexAuth,
-  requestCodexUsage,
-  type UsageSnapshot,
 } from "./src/usage.ts";
 import {
   buildBankedResetConfirmation,
@@ -71,10 +69,9 @@ import {
   formatBankedResetChoice,
   formatConsumeOutcome,
   newRedeemRequestId,
-  requestBankedResetCredits,
   selectBankedResetCredit,
-  type BankedResetCredits,
 } from "./src/resets.ts";
+import { ResetController } from "./src/reset-controller.ts";
 import { registerOpenAIImage, _imageTest } from "./src/image.ts";
 import { registerOpenAIWebSearch, _websearchTest } from "./src/websearch.ts";
 import { registerOpenAILive } from "./src/live/index.ts";
@@ -90,7 +87,7 @@ import {
   _petsTest,
 } from "./src/pets.ts";
 import { FastController, modelList, supportsFast } from "./src/fast-controller.ts";
-import { UsageController } from "./src/usage-controller.ts";
+import { isOpenAISubscriptionModel, UsageController } from "./src/usage-controller.ts";
 import { PetFooterController } from "./src/pet-footer-controller.ts";
 import {
   abbreviateHomePath,
@@ -247,6 +244,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   let cachedSessionNameLeafId: string | null | undefined;
   let cachedSessionName: string | undefined;
   const usageController = new UsageController(config, updateFooter);
+  const resetController = new ResetController();
   const petController = new PetFooterController(config, updateFooter, () => footerInstalled);
   let multiproviderService: MultiproviderService | undefined;
   let unsubscribeMultiprovider: (() => void) | undefined;
@@ -265,6 +263,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       setActiveMultiproviderService(value);
       unsubscribeMultiprovider = value.onActiveAccountChanged(CODEX_PROVIDER_ID, (event) => {
         void usageController.refresh(event.ctx, undefined, { force: true });
+        void resetController.refresh(event.ctx, { force: true }).catch(() => {});
         updateFooter(event.ctx);
       });
       const ctx = multiproviderRefreshCtx;
@@ -402,27 +401,18 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       ctx.ui.notify("/openai-resets requires an interactive TUI session.", "warning");
       return;
     }
-    const timeoutSignal = AbortSignal.timeout(15_000);
-    const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeoutSignal]) : timeoutSignal;
-    let credits: BankedResetCredits | undefined;
-    let snapshot: UsageSnapshot | undefined;
-    try {
-      const [creditResult, usageResult] = await Promise.all([
-        requestBankedResetCredits(ctx, signal),
-        requestCodexUsage(ctx, signal).catch(() => undefined),
-      ]);
-      credits = creditResult;
-      snapshot = usageResult ? parseUsageSnapshot(usageResult, ctx.model?.id) : undefined;
-    } catch (error) {
-      ctx.ui.notify(
-        `Banked reset lookup failed: ${sanitizeDiagnosticError(
-          error instanceof Error ? error.message : String(error),
-        )}`,
-        "error",
-      );
+    let credits = resetController.snapshot?.credits;
+    if (!credits) {
+      await resetController.refresh(ctx, { force: true }).catch(() => {});
+      credits = resetController.snapshot?.credits;
+    }
+    if (!credits) {
+      const reason = resetController.lastError;
+      ctx.ui.notify(`Banked reset lookup failed${reason ? `: ${reason}` : "."}`, "error");
       return;
     }
-    if (!credits || credits.availableCount <= 0) {
+    void resetController.refresh(ctx).catch(() => {});
+    if (credits.availableCount <= 0) {
       ctx.ui.notify("No banked Codex resets are available for this account.", "info");
       return;
     }
@@ -440,17 +430,20 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     const confirmation = buildBankedResetConfirmation({
       credit: selected,
       availableCount: credits.availableCount,
-      snapshot,
+      snapshot: usageController.snapshot,
     });
     if (!(await ctx.ui.confirm(confirmation.title, confirmation.message))) {
       ctx.ui.notify("Banked reset redemption cancelled.", "info");
       return;
     }
     try {
+      const timeoutSignal = AbortSignal.timeout(15_000);
+      const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeoutSignal]) : timeoutSignal;
       const result = await consumeBankedReset(ctx, selected?.id, newRedeemRequestId(), signal);
       const outcome = formatConsumeOutcome(result);
       ctx.ui.notify(outcome.message, outcome.level);
       void usageController.refresh(ctx, ctx.model?.id, { force: true });
+      void resetController.refresh(ctx, { force: true }).catch(() => {});
       updateFooter(ctx);
     } catch (error) {
       ctx.ui.notify(
@@ -1393,6 +1386,8 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     updateFooter(ctx);
     if (hasTerminalUI(ctx) && nextConfig.pets.enabled) void petController.refresh(ctx, nextConfig);
     usageController.start(ctx);
+    if (nextConfig.usage.enabled && isOpenAISubscriptionModel(ctx, nextConfig))
+      resetController.start(ctx);
     if (fastController.active) ctx.ui.notify(fastController.stateText(ctx, nextConfig), "info");
   });
 
@@ -1469,6 +1464,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     invalidateSessionName();
     multiproviderRefreshCtx = undefined;
     usageController.shutdown();
+    resetController.stop();
     petController.shutdown();
   });
 

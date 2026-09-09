@@ -476,7 +476,7 @@ describe("usage polling lifecycle", () => {
     });
 
     await emit(harness, "session_start");
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(harness.ctx.ui.setWidget).toHaveBeenCalled());
 
     const widgetFactory = vi.mocked(harness.ctx.ui.setWidget).mock.calls.at(-1)?.[1];
@@ -506,7 +506,7 @@ describe("usage polling lifecycle", () => {
     });
 
     await emit(harness, "session_start");
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     abortController.abort();
     Object.defineProperty(harness.ctx, "model", {
       get() {
@@ -533,7 +533,7 @@ describe("usage polling lifecycle", () => {
     });
 
     await emit(harness, "session_start");
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     Object.defineProperty(harness.ctx, "model", {
       get() {
         throw new Error("This extension ctx is stale after session replacement or reload.");
@@ -558,13 +558,13 @@ describe("usage polling lifecycle", () => {
     });
 
     await emit(harness, "session_start");
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     await emit(harness, "turn_end");
     await emit(harness, "turn_end");
     await settleAsyncWork();
     await emit(harness, "session_shutdown");
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   test("forces refreshes for model selection and manual usage status", async () => {
@@ -579,14 +579,14 @@ describe("usage polling lifecycle", () => {
     });
 
     await emit(harness, "session_start");
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     harness.ctx.model = { provider: "openai", id: "gpt-5.5" } as ExtensionContext["model"];
     await emit(harness, "model_select", { model: harness.ctx.model });
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     await harness.commands.get("openai-usage")?.handler("", harness.ctx);
     await emit(harness, "session_shutdown");
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(harness.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Usage:"), "info");
   });
 
@@ -602,15 +602,15 @@ describe("usage polling lifecycle", () => {
     });
 
     await emit(harness, "session_start");
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     await emit(harness, "turn_end");
     await emit(harness, "turn_end");
     await settleAsyncWork();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     await harness.commands.get("openai-usage")?.handler("", harness.ctx);
     await emit(harness, "session_shutdown");
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
       expect.stringContaining("Codex usage request failed (500)"),
       "warning",
@@ -618,10 +618,14 @@ describe("usage polling lifecycle", () => {
   });
 
   test("hides a successful snapshot and reports a later refresh failure", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(usageJsonResponse())
-      .mockResolvedValueOnce(new Response("nope", { status: 500 }));
+    let usageCalls = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes("rate-limit-reset-credits")) {
+        return new Response(JSON.stringify({ credits: [], available_count: 0 }));
+      }
+      usageCalls += 1;
+      return usageCalls === 1 ? usageJsonResponse() : new Response("nope", { status: 500 });
+    });
     vi.stubGlobal("fetch", fetchMock);
     const harness = await createUsageHarness({
       usageConfig: {
@@ -634,7 +638,7 @@ describe("usage polling lifecycle", () => {
     });
 
     await emit(harness, "session_start");
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     await harness.commands.get("openai-usage")?.handler("", harness.ctx);
     await emit(harness, "session_shutdown");
 

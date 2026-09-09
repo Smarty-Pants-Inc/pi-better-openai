@@ -123,9 +123,31 @@ async function importResetsWithAgentDir(agentDir: string) {
   return import("../src/resets.ts");
 }
 
+async function importResetControllerWithAgentDir(agentDir: string) {
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  vi.resetModules();
+  return import("../src/reset-controller.ts");
+}
+
+async function emit(
+  harness: { handlers: Map<string, EventHandler[]>; ctx: ExtensionContext },
+  event: string,
+  payload: unknown = {},
+): Promise<void> {
+  const handlers = harness.handlers.get(event) ?? [];
+  for (const handler of handlers) {
+    await handler(payload, harness.ctx);
+  }
+}
+
+async function settleAsyncWork(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
 async function createResetsHarness(): Promise<{
   ctx: ExtensionContext;
   commands: Map<string, { handler: CommandHandler }>;
+  handlers: Map<string, EventHandler[]>;
 }> {
   const cwd = createTempDir("pi-better-openai-resets-project-");
   const agentDir = createTempDir("pi-better-openai-resets-agent-");
@@ -180,7 +202,7 @@ async function createResetsHarness(): Promise<{
   } as unknown as ExtensionContext;
 
   betterOpenAI(pi);
-  return { ctx, commands };
+  return { ctx, commands, handlers };
 }
 
 function credit(overrides: Partial<BankedResetCredit> = {}): BankedResetCredit {
@@ -199,6 +221,7 @@ function credit(overrides: Partial<BankedResetCredit> = {}): BankedResetCredit {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+  vi.useRealTimers();
   if (originalPiCodingAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = originalPiCodingAgentDir;
   for (const tempDir of tempDirs.splice(0)) {
@@ -570,5 +593,121 @@ describe("/openai-resets command", () => {
       string,
     ];
     expect(confirmMessage).toContain("Reset B");
+  });
+});
+
+describe("ResetController caching", () => {
+  function controllerCtx(): ExtensionContext {
+    return {
+      modelRegistry: { getApiKeyForProvider: () => Promise.resolve(undefined) },
+    } as unknown as ExtensionContext;
+  }
+
+  test("serves repeated refreshes from the cache within the TTL", async () => {
+    const agentDir = createTempDir("pi-better-openai-resets-agent-");
+    writeCodexAuth(agentDir);
+    const fetchMock = stubResetsFetch();
+    const mod = await importResetControllerWithAgentDir(agentDir);
+    const controller = new mod.ResetController();
+    const ctx = controllerCtx();
+
+    await controller.refresh(ctx);
+
+    expect(controller.snapshot?.credits.availableCount).toBe(1);
+    expect(controller.isFresh()).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await controller.refresh(ctx);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await controller.refresh(ctx, { force: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("keeps the previous cache and records the error when a refresh fails", async () => {
+    const agentDir = createTempDir("pi-better-openai-resets-agent-");
+    writeCodexAuth(agentDir);
+    const fetchMock = stubResetsFetch();
+    const mod = await importResetControllerWithAgentDir(agentDir);
+    const controller = new mod.ResetController();
+    const ctx = controllerCtx();
+    await controller.refresh(ctx);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 500 })),
+    );
+    await controller.refresh(ctx, { force: true });
+
+    expect(controller.lastError).toContain("failed (500)");
+    expect(controller.snapshot?.credits.availableCount).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not fetch without credentials and records the error", async () => {
+    const agentDir = createTempDir("pi-better-openai-resets-agent-");
+    mkdirSync(agentDir, { recursive: true });
+    const fetchMock = stubResetsFetch();
+    const mod = await importResetControllerWithAgentDir(agentDir);
+    const controller = new mod.ResetController();
+
+    await controller.refresh(controllerCtx());
+
+    expect(controller.snapshot).toBeUndefined();
+    expect(controller.lastError).toContain("credentials unavailable");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("/openai-resets cached flow", () => {
+  test("opens from the warmed cache without new requests", async () => {
+    const fetchMock = stubResetsFetch();
+    const harness = await createResetsHarness();
+    vi.mocked(harness.ctx.ui.confirm).mockResolvedValue(false);
+    await emit(harness, "session_start");
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await settleAsyncWork();
+
+    fetchMock.mockClear();
+    await harness.commands.get("openai-resets")?.handler("", harness.ctx);
+    await settleAsyncWork();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(harness.ctx.ui.confirm).toHaveBeenCalledTimes(1);
+    const [, message] = vi.mocked(harness.ctx.ui.confirm).mock.calls[0] as unknown as [
+      string,
+      string,
+    ];
+    expect(message).toContain("Full reset (Weekly + 5 hr)");
+    expect(consumeCalls(fetchMock)).toHaveLength(0);
+    await emit(harness, "session_shutdown");
+  });
+
+  test("serves a stale cache instantly and refreshes it in the background", async () => {
+    const fetchMock = stubResetsFetch();
+    const harness = await createResetsHarness();
+    vi.mocked(harness.ctx.ui.confirm).mockResolvedValue(false);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const base = Date.now();
+    try {
+      await emit(harness, "session_start");
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      await settleAsyncWork();
+      vi.setSystemTime(base + 6 * 60_000);
+      fetchMock.mockClear();
+      await harness.commands.get("openai-resets")?.handler("", harness.ctx);
+      await settleAsyncWork();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(harness.ctx.ui.confirm).toHaveBeenCalledTimes(1);
+      const [, message] = vi.mocked(harness.ctx.ui.confirm).mock.calls[0] as unknown as [
+        string,
+        string,
+      ];
+      expect(message).toContain("Full reset (Weekly + 5 hr)");
+      expect(consumeCalls(fetchMock)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+    await emit(harness, "session_shutdown");
   });
 });
