@@ -146,7 +146,9 @@ export const DEFAULT_FOOTER_CONFIG: Required<FooterConfig> = {
   mode: "replace",
 };
 
-export const DEFAULT_IMAGE_MODEL = "gpt-image-2";
+export const IMAGE_MODEL_CHOICES = ["gpt-image-2.5", "gpt-image-2"] as const;
+
+export const DEFAULT_IMAGE_MODEL = "gpt-image-2.5";
 
 export const DEFAULT_IMAGE_CONFIG: Required<ImageConfig> = {
   enabled: true,
@@ -313,7 +315,7 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     key: "defaultModel",
     label: "Image model",
     currentValue: (cfg) => cfg.image.defaultModel,
-    values: ["gpt-image-2"],
+    values: IMAGE_MODEL_CHOICES,
     description: "GPT Image model used by the standalone Codex Images API.",
     parse: stringSetting,
   },
@@ -606,7 +608,7 @@ export function readRawConfig(path: string): Record<string, unknown> {
 export function normalizeImageModel(value: string): string {
   const trimmed = value.trim();
   const model = trimmed.includes("/") ? trimmed.split("/").pop() || trimmed : trimmed;
-  return model.startsWith("gpt-5") ? DEFAULT_IMAGE_MODEL : model;
+  return model.startsWith("gpt-image-") ? model : DEFAULT_IMAGE_MODEL;
 }
 
 export function readConfig(path: string): ConfigFile | undefined {

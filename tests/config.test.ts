@@ -44,7 +44,7 @@ describe("config helpers", () => {
   test("exposes expected defaults", () => {
     expect(_test.CONFIG_BASENAME).toBe("pi-better-openai.json");
     expect(_test.DEFAULT_CONFIG.desiredActive).toBe(false);
-    expect(_test.DEFAULT_IMAGE_CONFIG.defaultModel).toBe("gpt-image-2");
+    expect(_test.DEFAULT_IMAGE_CONFIG.defaultModel).toBe("gpt-image-2.5");
     expect(_test.DEFAULT_IMAGE_CONFIG.defaultSave).toBe("project");
     expect(_test.DEFAULT_LIVE_CONFIG).toEqual({ enabled: true, voice: "sol" });
     expect(_test.DEFAULT_PET_CONFIG.placement).toBe("inline-right");
@@ -75,11 +75,20 @@ describe("config helpers", () => {
     expect(_test.normalizeModelKeys(["openai/gpt-5.5", "bad", 42])).toEqual(["openai/gpt-5.5"]);
   });
 
-  test("migrates legacy Responses image models to the standalone image model", () => {
+  test("migrates legacy chat models to the standalone image model", () => {
     withTempDir((tempDir) => {
       const configPath = _test.configPaths(tempDir).project;
-      writeConfig(configPath, { image: { defaultModel: "openai-codex/gpt-5.5" } });
+      for (const legacyModel of [
+        "openai-codex/gpt-5.5",
+        "gpt-5.6-luna",
+        "openai-codex/gpt-6-astra",
+        "gpt-daybreak-blue-latest",
+      ]) {
+        writeConfig(configPath, { image: { defaultModel: legacyModel } });
+        expect(_test.resolveConfig(tempDir).image.defaultModel).toBe("gpt-image-2.5");
+      }
 
+      writeConfig(configPath, { image: { defaultModel: "gpt-image-2" } });
       expect(_test.resolveConfig(tempDir).image.defaultModel).toBe("gpt-image-2");
     });
   });
@@ -223,6 +232,7 @@ describe("config helpers", () => {
     ).toBe("");
     expect(descriptors.get("pets.sizeCells")?.parse("12")).toBe(12);
     expect(descriptors.get("image.timeoutMs")?.parse("45000")).toBe(45000);
+    expect(descriptors.get("image.defaultModel")?.values).toEqual(["gpt-image-2.5", "gpt-image-2"]);
     expect(descriptors.get("live.enabled")?.parse("true")).toBe(true);
     expect(descriptors.get("live.voice")?.parse("vale")).toBe("vale");
   });

@@ -89,7 +89,7 @@ Example config:
   },
   "image": {
     "enabled": true,
-    "defaultModel": "gpt-image-2",
+    "defaultModel": "gpt-image-2.5",
     "defaultSave": "project",
     "outputFormat": "png",
     "timeoutMs": 180000
@@ -147,7 +147,7 @@ Agents can call the `openai_image` tool directly. Supported parameters:
 - `prompt` (required): pass the user's image wording verbatim.
 - `action`: `auto`, `generate`, or `edit`. `auto` uses the edit endpoint when `images` are supplied; explicit `edit` requires images, while explicit `generate` does not accept them.
 - `images`: up to five distinct project-local reference/edit image paths. Paths must stay inside the current workspace and point to readable PNG, JPEG, WebP, or GIF files; each file is limited to 20 MB and the combined input to 50 MB.
-- `model`: GPT Image model override for the standalone Codex Images API, for example `gpt-image-2`.
+- `model`: GPT Image model override for the standalone Codex Images API, for example `gpt-image-2.5` or `gpt-image-2`. Values outside the `gpt-image-` family, including legacy Responses chat models, are replaced with the configured default image model.
 - `outputFormat`: `png`, `jpeg`, or `webp`. Codex returns PNG and the extension converts other formats locally.
 - `save`: `project`, `global`, `custom`, or `none`.
 - `saveDir`: required for `save: "custom"` unless `PI_IMAGE_SAVE_DIR` is set.

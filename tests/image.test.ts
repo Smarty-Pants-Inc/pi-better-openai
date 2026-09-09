@@ -243,7 +243,7 @@ describe("openai_image tool execution", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       prompt: "draw an otter",
       background: "auto",
-      model: "gpt-image-2",
+      model: "gpt-image-2.5",
       quality: "auto",
       size: "auto",
     });
@@ -255,14 +255,32 @@ describe("openai_image tool execution", () => {
       id: expect.stringMatching(/^ig_/),
       status: "completed",
       data: "Zm9v",
-      model: "gpt-image-2",
+      model: "gpt-image-2.5",
       action: "generate",
       outputFormat: "png",
       savedPath: undefined,
     });
   });
 
-  test("maps legacy explicit Responses models to gpt-image-2", async () => {
+  test("maps legacy chat models to the default image model", async () => {
+    for (const legacyModel of ["openai-codex/gpt-5.5", "openai-codex/gpt-6-astra"]) {
+      const fetchMock = stubFetch(codexImageResponse());
+      const harness = createImageHarness({
+        registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
+      });
+
+      await executeImageTool(harness, {
+        prompt: "draw",
+        model: legacyModel,
+        save: "none",
+      });
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(String(init.body))).toMatchObject({ model: "gpt-image-2.5" });
+    }
+  });
+
+  test("passes explicit image model overrides through unchanged", async () => {
     const fetchMock = stubFetch(codexImageResponse());
     const harness = createImageHarness({
       registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
@@ -270,7 +288,7 @@ describe("openai_image tool execution", () => {
 
     await executeImageTool(harness, {
       prompt: "draw",
-      model: "openai-codex/gpt-5.5",
+      model: "gpt-image-2",
       save: "none",
     });
 
@@ -350,7 +368,7 @@ describe("openai_image tool execution", () => {
       ],
       prompt: "edit it",
       background: "auto",
-      model: "gpt-image-2",
+      model: "gpt-image-2.5",
       quality: "auto",
       size: "auto",
     });
@@ -626,7 +644,7 @@ describe("openai_image tool execution", () => {
 
     expect(debug).toMatchObject({
       endpoint: _test.imageTest.CODEX_IMAGES_BASE_URL,
-      defaultModel: "gpt-image-2",
+      defaultModel: "gpt-image-2.5",
       accountId: "acct...cdef",
     });
     expect(debug.accountId).not.toBe("acct_1234567890abcdef");
