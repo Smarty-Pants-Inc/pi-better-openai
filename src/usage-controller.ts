@@ -113,6 +113,7 @@ export class UsageController {
       `Last successful update: ${this.usageUpdatedAt ? new Date(this.usageUpdatedAt).toLocaleTimeString() : "never"}`,
       `Last error: ${this.usageError ?? "none"}`,
       `Refresh interval: ${cfg.usage.refreshIntervalMs}ms`,
+      `Banked resets: ${this.usageSnapshot?.bankedResets ?? "n/a"}`,
       `Endpoint: https://chatgpt.com/backend-api/wham/usage`,
     ].join("\n");
   }

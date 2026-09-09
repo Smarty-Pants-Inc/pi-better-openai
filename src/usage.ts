@@ -19,6 +19,7 @@ export type RateLimitBucket = {
 export type CodexUsageResponse = {
   rate_limit?: RateLimitBucket | null;
   additional_rate_limits?: Record<string, unknown> | unknown[] | null;
+  rate_limit_reset_credits?: { available_count?: number | null } | null;
 };
 
 export type UsageSnapshot = {
@@ -29,6 +30,7 @@ export type UsageSnapshot = {
   fiveHourResetInSeconds: number | null;
   sevenDayResetInSeconds: number | null;
   isLimited: boolean;
+  bankedResets: number | null;
 };
 
 export type UsageScope = "default" | "spark";
@@ -80,6 +82,11 @@ function clampPercent(value: number): number {
 function usedToLeftPercent(value: number | null | undefined): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   return clampPercent(100 - value);
+}
+
+function readBankedResetCount(data: CodexUsageResponse): number | null {
+  const raw = asObject(data.rate_limit_reset_credits)?.available_count;
+  return typeof raw === "number" && Number.isInteger(raw) && raw >= 0 ? raw : null;
 }
 
 export function formatResetCountdown(seconds: number | null): string | null {
@@ -236,6 +243,7 @@ export function parseUsageSnapshot(
     fiveHourResetInSeconds: weeklyOnly ? null : getResetSeconds(primaryWindow, now),
     sevenDayResetInSeconds: getResetSeconds(weeklyOnly ? primaryWindow : secondaryWindow, now),
     isLimited: bucket?.limit_reached === true || bucket?.allowed === false,
+    bankedResets: readBankedResetCount(data),
   };
 }
 
@@ -247,7 +255,7 @@ export function formatPercent(value: number | null): string {
 
 export function formatUsageSnapshot(
   snapshot: UsageSnapshot,
-  options: { showResetTimes: boolean },
+  options: { showResetTimes: boolean; showBankedResets?: boolean },
   now = Date.now(),
 ): string {
   const windows = [
@@ -283,7 +291,14 @@ export function formatUsageSnapshot(
         )
         .filter((value): value is string => value !== null)
     : [];
-  return `Usage: ${usage}${resets.length ? ` · ${resets.join(" · ")}` : ""}`;
+  const banked =
+    options.showBankedResets === false ? null : formatBankedResetsSuffix(snapshot.bankedResets);
+  return `Usage: ${usage}${resets.length ? ` · ${resets.join(" · ")}` : ""}${banked ? ` · ${banked}` : ""}`;
+}
+
+export function formatBankedResetsSuffix(count: number | null): string | null {
+  if (typeof count !== "number" || !Number.isInteger(count) || count <= 0) return null;
+  return `${count} banked reset${count === 1 ? "" : "s"}`;
 }
 
 function remainingResetSeconds(

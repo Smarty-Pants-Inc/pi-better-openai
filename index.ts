@@ -24,6 +24,7 @@ import {
 import {
   formatTokens,
   redactDiagnosticValue,
+  sanitizeDiagnosticError,
   sanitizeStatusText,
   truncateToWidth,
   visibleWidth,
@@ -61,7 +62,19 @@ import {
   formatUsageSnapshot,
   parseUsageSnapshot,
   readCodexAuth,
+  requestCodexUsage,
+  type UsageSnapshot,
 } from "./src/usage.ts";
+import {
+  buildBankedResetConfirmation,
+  consumeBankedReset,
+  formatBankedResetChoice,
+  formatConsumeOutcome,
+  newRedeemRequestId,
+  requestBankedResetCredits,
+  selectBankedResetCredit,
+  type BankedResetCredits,
+} from "./src/resets.ts";
 import { registerOpenAIImage, _imageTest } from "./src/image.ts";
 import { registerOpenAIWebSearch, _websearchTest } from "./src/websearch.ts";
 import { registerOpenAILive } from "./src/live/index.ts";
@@ -121,6 +134,7 @@ class DynamicBorder {
 const COMMAND = "fast";
 const OPENAI_STATUS_COMMAND = "openai-usage";
 const OPENAI_SETTINGS_COMMAND = "openai-settings";
+const OPENAI_RESETS_COMMAND = "openai-resets";
 const FLAG = "fast";
 const PET_EMPTY_VALUE = "not selected";
 const SERVICE_TIER = "priority";
@@ -383,6 +397,71 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     ].join("\n");
   }
 
+  async function redeemBankedReset(ctx: ExtensionContext): Promise<void> {
+    if (!hasTerminalUI(ctx)) {
+      ctx.ui.notify("/openai-resets requires an interactive TUI session.", "warning");
+      return;
+    }
+    const timeoutSignal = AbortSignal.timeout(15_000);
+    const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeoutSignal]) : timeoutSignal;
+    let credits: BankedResetCredits | undefined;
+    let snapshot: UsageSnapshot | undefined;
+    try {
+      const [creditResult, usageResult] = await Promise.all([
+        requestBankedResetCredits(ctx, signal),
+        requestCodexUsage(ctx, signal).catch(() => undefined),
+      ]);
+      credits = creditResult;
+      snapshot = usageResult ? parseUsageSnapshot(usageResult, ctx.model?.id) : undefined;
+    } catch (error) {
+      ctx.ui.notify(
+        `Banked reset lookup failed: ${sanitizeDiagnosticError(
+          error instanceof Error ? error.message : String(error),
+        )}`,
+        "error",
+      );
+      return;
+    }
+    if (!credits || credits.availableCount <= 0) {
+      ctx.ui.notify("No banked Codex resets are available for this account.", "info");
+      return;
+    }
+    const available = credits.credits.filter((credit) => credit.status === "available");
+    let selected = selectBankedResetCredit(credits.credits);
+    if (available.length > 1 && selected) {
+      const options = available.map((credit, index) => formatBankedResetChoice(credit, index));
+      const chosen = await ctx.ui.select("Redeem which banked reset?", options);
+      if (chosen === undefined) {
+        ctx.ui.notify("Banked reset redemption cancelled.", "info");
+        return;
+      }
+      selected = available[Math.max(0, options.indexOf(chosen))];
+    }
+    const confirmation = buildBankedResetConfirmation({
+      credit: selected,
+      availableCount: credits.availableCount,
+      snapshot,
+    });
+    if (!(await ctx.ui.confirm(confirmation.title, confirmation.message))) {
+      ctx.ui.notify("Banked reset redemption cancelled.", "info");
+      return;
+    }
+    try {
+      const result = await consumeBankedReset(ctx, selected?.id, newRedeemRequestId(), signal);
+      const outcome = formatConsumeOutcome(result);
+      ctx.ui.notify(outcome.message, outcome.level);
+      void usageController.refresh(ctx, ctx.model?.id, { force: true });
+      updateFooter(ctx);
+    } catch (error) {
+      ctx.ui.notify(
+        `Banked reset redemption failed: ${sanitizeDiagnosticError(
+          error instanceof Error ? error.message : String(error),
+        )}`,
+        "error",
+      );
+    }
+  }
+
   pi.registerCommand(COMMAND, {
     description: "Toggle OpenAI fast mode",
     handler: async (args, ctx) => {
@@ -396,6 +475,13 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     description: "Show OpenAI subscription usage status",
     handler: async (_args, ctx) => {
       await usageController.refresh(ctx, ctx.model?.id, { notify: true, force: true });
+    },
+  });
+
+  pi.registerCommand(OPENAI_RESETS_COMMAND, {
+    description: "Inspect and redeem Codex banked rate-limit resets",
+    handler: async (_args, ctx) => {
+      await redeemBankedReset(ctx);
     },
   });
 

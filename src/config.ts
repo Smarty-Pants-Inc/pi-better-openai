@@ -58,6 +58,7 @@ export type UsageConfig = {
   refreshIntervalMs?: number;
   showOnlyOnSubscriptionModels?: boolean;
   showResetTimes?: boolean;
+  showBankedResets?: boolean;
 };
 
 export type FooterConfig = {
@@ -140,6 +141,7 @@ export const DEFAULT_USAGE_CONFIG: Required<UsageConfig> = {
   refreshIntervalMs: 60_000,
   showOnlyOnSubscriptionModels: true,
   showResetTimes: true,
+  showBankedResets: true,
 };
 
 export const DEFAULT_FOOTER_CONFIG: Required<FooterConfig> = {
@@ -294,6 +296,16 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => String(cfg.usage.showResetTimes),
     values: ["true", "false"],
     description: "Include compact reset countdowns and local reset times.",
+    parse: booleanSetting,
+  },
+  {
+    id: "usage.showBankedResets",
+    section: "usage",
+    key: "showBankedResets",
+    label: "Banked reset count",
+    currentValue: (cfg) => String(cfg.usage.showBankedResets),
+    values: ["true", "false"],
+    description: "Show the available banked Codex reset count in the usage status line.",
     parse: booleanSetting,
   },
 ];
@@ -629,6 +641,8 @@ export function readConfig(path: string): ConfigFile | undefined {
       config.usage.showOnlyOnSubscriptionModels = parsed.usage.showOnlyOnSubscriptionModels;
     if (typeof parsed.usage.showResetTimes === "boolean")
       config.usage.showResetTimes = parsed.usage.showResetTimes;
+    if (typeof parsed.usage.showBankedResets === "boolean")
+      config.usage.showBankedResets = parsed.usage.showBankedResets;
   }
   if (
     isRecord(parsed.footer) &&
