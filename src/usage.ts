@@ -253,11 +253,29 @@ export function formatPercent(value: number | null): string {
     : "--";
 }
 
-export function formatUsageSnapshot(
+export type UsageSeverity = "ok" | "warning" | "critical" | "muted";
+
+export type UsageSegment = {
+  text: string;
+  severity: UsageSeverity;
+};
+
+/** Remaining budget at or below these thresholds turns the percentage amber/red. */
+const WARNING_LEFT_PERCENT = 30;
+const CRITICAL_LEFT_PERCENT = 10;
+
+export function severityForLeftPercent(percent: number | null): UsageSeverity {
+  if (percent === null) return "muted";
+  if (percent <= CRITICAL_LEFT_PERCENT) return "critical";
+  if (percent <= WARNING_LEFT_PERCENT) return "warning";
+  return "ok";
+}
+
+export function usageSegments(
   snapshot: UsageSnapshot,
   options: { showResetTimes: boolean; showBankedResets?: boolean },
   now = Date.now(),
-): string {
+): UsageSegment[] {
   const windows = [
     {
       label: "5h",
@@ -276,24 +294,41 @@ export function formatUsageSnapshot(
     (window) => window.percent !== null || window.resetSeconds !== null,
   );
   const displayedWindows = availableWindows.length > 0 ? availableWindows : windows;
-  const usage = displayedWindows
-    .map((window) => `${window.label}: ${formatPercent(window.percent)}`)
-    .join(" · ");
-  const resets = options.showResetTimes
-    ? displayedWindows
-        .map((window) =>
-          formatCompactReset(
-            displayedWindows.length > 1 ? window.label : undefined,
-            remainingResetSeconds(window.resetSeconds, snapshot.capturedAt, now),
-            window.includeDate ? { includeDate: true } : undefined,
-            now,
-          ),
-        )
-        .filter((value): value is string => value !== null)
-    : [];
+  const segments: UsageSegment[] = [{ text: "Usage: ", severity: "muted" }];
+  displayedWindows.forEach((window, index) => {
+    if (index > 0) segments.push({ text: " · ", severity: "muted" });
+    segments.push({ text: `${window.label}: `, severity: "muted" });
+    segments.push({
+      text: formatPercent(window.percent),
+      severity: severityForLeftPercent(window.percent),
+    });
+  });
+  if (options.showResetTimes) {
+    for (const window of displayedWindows) {
+      const reset = formatCompactReset(
+        displayedWindows.length > 1 ? window.label : undefined,
+        remainingResetSeconds(window.resetSeconds, snapshot.capturedAt, now),
+        window.includeDate ? { includeDate: true } : undefined,
+        now,
+      );
+      if (reset) segments.push({ text: ` · ${reset}`, severity: "muted" });
+    }
+  }
   const banked =
     options.showBankedResets === false ? null : formatBankedResetsSuffix(snapshot.bankedResets);
-  return `Usage: ${usage}${resets.length ? ` · ${resets.join(" · ")}` : ""}${banked ? ` · ${banked}` : ""}`;
+  if (banked) segments.push({ text: ` · ${banked}`, severity: "muted" });
+  return segments;
+}
+
+/** Flat text form of {@link usageSegments}, used for status lines and notifications. */
+export function formatUsageSnapshot(
+  snapshot: UsageSnapshot,
+  options: { showResetTimes: boolean; showBankedResets?: boolean },
+  now = Date.now(),
+): string {
+  return usageSegments(snapshot, options, now)
+    .map((segment) => segment.text)
+    .join("");
 }
 
 export function formatBankedResetsSuffix(count: number | null): string | null {

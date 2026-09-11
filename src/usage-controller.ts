@@ -3,6 +3,7 @@ import type { ResolvedConfig } from "./config.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
 import {
   AUTH_FILE,
+  type UsageSegment,
   type UsageSnapshot,
   formatResetCountdown,
   formatUsageSnapshot,
@@ -10,6 +11,7 @@ import {
   readCodexAuth,
   requestCodexUsage,
   usageScopeForModel,
+  usageSegments,
 } from "./usage.ts";
 import { currentModelKey } from "./fast-controller.ts";
 
@@ -70,18 +72,28 @@ export class UsageController {
     return this.usageSnapshot;
   }
 
-  statusLine(
+  statusSegments(
     ctx: ExtensionContext,
     cfg = this.getConfig(ctx),
     isUsingOAuth?: boolean,
-  ): string | undefined {
+  ): UsageSegment[] | undefined {
     return this.usageSnapshot &&
       !this.usageError &&
       this.usageSnapshot.scope === usageScopeForModel(ctx.model?.id) &&
       cfg.usage.enabled &&
       isOpenAISubscriptionModel(ctx, cfg, isUsingOAuth)
-      ? formatUsageSnapshot(this.usageSnapshot, cfg.usage)
+      ? usageSegments(this.usageSnapshot, cfg.usage)
       : undefined;
+  }
+
+  statusLine(
+    ctx: ExtensionContext,
+    cfg = this.getConfig(ctx),
+    isUsingOAuth?: boolean,
+  ): string | undefined {
+    return this.statusSegments(ctx, cfg, isUsingOAuth)
+      ?.map((segment) => segment.text)
+      .join("");
   }
 
   formatStatus(ctx: ExtensionContext): string {

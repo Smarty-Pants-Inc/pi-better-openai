@@ -5,6 +5,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { _test } from "../index.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "../src/format.ts";
+import { severityForLeftPercent, usageSegments } from "../src/usage.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
 type CommandHandler = (args: string, ctx: ExtensionContext) => unknown | Promise<unknown>;
@@ -336,6 +337,62 @@ describe("usage helpers", () => {
   });
 });
 
+describe("usage line colours", () => {
+  test("tags each percentage with the severity of the budget left", () => {
+    const usage = _test.parseUsageSnapshot(
+      {
+        rate_limit: {
+          primary_window: { used_percent: 10, reset_after_seconds: 3600 },
+          secondary_window: { used_percent: 85, reset_after_seconds: 72 * 3600 },
+        },
+      },
+      "gpt-5.5",
+    );
+
+    const segments = usageSegments(usage, { showResetTimes: false });
+
+    expect(segments).toEqual([
+      { text: "Usage: ", severity: "muted" },
+      { text: "5h: ", severity: "muted" },
+      { text: "90%", severity: "ok" },
+      { text: " · ", severity: "muted" },
+      { text: "7d: ", severity: "muted" },
+      { text: "15%", severity: "warning" },
+    ]);
+    expect(segments.map((segment) => segment.text).join("")).toBe(
+      _test.formatUsageSnapshot(usage, { showResetTimes: false }),
+    );
+  });
+
+  test("keeps labels and countdowns dim while the budget drains", () => {
+    const capturedAt = new Date("2026-07-09T12:00:00Z").getTime();
+    const usage = _test.parseUsageSnapshot(
+      {
+        rate_limit: {
+          primary_window: { used_percent: 95, reset_after_seconds: 3600 },
+        },
+      },
+      "gpt-5.5",
+      capturedAt,
+    );
+
+    const segments = usageSegments(usage, { showResetTimes: true }, capturedAt);
+
+    expect(segments.filter((segment) => segment.severity !== "muted")).toEqual([
+      { text: "5%", severity: "critical" },
+    ]);
+    expect(segments.some((segment) => segment.text.startsWith(" · ↺ "))).toBe(true);
+  });
+
+  test("escalates severity as the remaining budget drains", () => {
+    expect(severityForLeftPercent(null)).toBe("muted");
+    expect(severityForLeftPercent(31)).toBe("ok");
+    expect(severityForLeftPercent(30)).toBe("warning");
+    expect(severityForLeftPercent(10)).toBe("critical");
+    expect(severityForLeftPercent(0)).toBe("critical");
+  });
+});
+
 describe("requestCodexUsage", () => {
   test("reads isolated auth and sends usage fetch headers", async () => {
     const agentDir = createTempDir("pi-better-openai-usage-agent-");
@@ -482,12 +539,20 @@ describe("usage polling lifecycle", () => {
     const widgetFactory = vi.mocked(harness.ctx.ui.setWidget).mock.calls.at(-1)?.[1];
     expect(widgetFactory).toEqual(expect.any(Function));
     if (typeof widgetFactory !== "function") throw new Error("Expected a status widget factory");
+    const colorCalls: Array<[string, string]> = [];
     const widget = widgetFactory(
       {} as never,
-      { fg: (_color: string, value: string) => value } as never,
+      {
+        fg: (color: string, value: string) => {
+          colorCalls.push([color, value]);
+          return value;
+        },
+      } as never,
     );
     expect(widget.render(200)[0]).toContain("Usage:");
     expect(widget.render(200)[0]).toContain("5h: 90%");
+    expect(colorCalls).toContainEqual(["success", "90%"]);
+    expect(colorCalls).toContainEqual(["dim", "Usage: "]);
     await emit(harness, "session_shutdown");
   });
 
