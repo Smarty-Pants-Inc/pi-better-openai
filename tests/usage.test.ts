@@ -5,6 +5,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { _test } from "../index.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "../src/format.ts";
+import { MULTIPROVIDER_SERVICE_EVENT, type MultiproviderService } from "../src/multiprovider.ts";
 import { severityForLeftPercent, usageSegments } from "../src/usage.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
@@ -14,6 +15,8 @@ type UsageHarness = {
   ctx: ExtensionContext;
   handlers: Map<string, EventHandler[]>;
   commands: Map<string, { handler: CommandHandler }>;
+  /** Delivers a pi-multiprovider service announcement to the extension. */
+  publishService(value: unknown): void;
 };
 
 const tempDirs: string[] = [];
@@ -116,6 +119,7 @@ async function createUsageHarness(options: {
 
   const handlers = new Map<string, EventHandler[]>();
   const commands = new Map<string, { handler: CommandHandler }>();
+  const serviceListeners = new Set<(value: unknown) => void>();
   const pi = {
     on(event: string, handler: EventHandler) {
       const currentHandlers = handlers.get(event) ?? [];
@@ -133,6 +137,11 @@ async function createUsageHarness(options: {
     sendMessage: vi.fn(),
     getFlag: vi.fn(() => false),
     getThinkingLevel: vi.fn(() => "off"),
+    events: {
+      on(event: string, listener: (value: unknown) => void) {
+        if (event === MULTIPROVIDER_SERVICE_EVENT) serviceListeners.add(listener);
+      },
+    },
   } as unknown as ExtensionAPI;
   const ctx = {
     cwd,
@@ -158,7 +167,14 @@ async function createUsageHarness(options: {
   } as unknown as ExtensionContext;
 
   betterOpenAI(pi);
-  return { ctx, handlers, commands };
+  return {
+    ctx,
+    handlers,
+    commands,
+    publishService(value: unknown) {
+      for (const listener of serviceListeners) listener(value);
+    },
+  };
 }
 
 async function emit(harness: UsageHarness, event: string, payload: unknown = {}): Promise<void> {
@@ -718,5 +734,126 @@ describe("usage polling lifecycle", () => {
     expect(harness.ctx.ui.setWidget).toHaveBeenLastCalledWith(expect.any(String), undefined, {
       placement: "belowEditor",
     });
+  });
+});
+
+function codexJwt(accountId: string): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${encode({ alg: "none" })}.${encode({
+    "https://api.openai.com/auth": { chatgpt_account_id: accountId },
+  })}.sig`;
+}
+
+function fakeMultiproviderService() {
+  type ChangedEvent = { providerId: string; account: unknown; ctx: ExtensionContext };
+  type Auth = { accessToken: string; label: string; source?: string } | undefined;
+  const listeners = new Set<(event: ChangedEvent) => void>();
+  let resolveAuth: () => Promise<Auth> = async () => undefined;
+  const resolveActiveAccountAuth = vi.fn(async () => resolveAuth());
+  const value = {
+    getActiveAccount: vi.fn(async () => undefined),
+    resolveActiveAccountAuth,
+    onActiveAccountChanged: vi.fn(
+      (_providerId: string, listener: (event: ChangedEvent) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    ),
+  } as unknown as MultiproviderService;
+  return {
+    value,
+    resolveActiveAccountAuth,
+    resolve(next: () => Promise<Auth>) {
+      resolveAuth = next;
+    },
+    notifyAccountChanged(event: ChangedEvent) {
+      for (const listener of listeners) listener(event);
+    },
+  };
+}
+
+/** Renders the most recently installed status widget, flattened for assertions. */
+function widgetLine(harness: UsageHarness): string {
+  const calls = vi.mocked(harness.ctx.ui.setWidget).mock.calls;
+  for (let index = calls.length - 1; index >= 0; index -= 1) {
+    const factory = calls[index]?.[1];
+    if (typeof factory !== "function") continue;
+    const widget = factory({} as never, { fg: (_color: string, value: string) => value } as never);
+    return widget.render(200).join("\n");
+  }
+  throw new Error("Expected a status widget to be installed");
+}
+
+describe("multiprovider resume", () => {
+  test("repaints usage with the account a resumed session restores", async () => {
+    // Usage is account-scoped: the upstream credential and the pooled account
+    // report different numbers, so the widget line identifies who was charged.
+    const fetchMock = vi.fn((_url: unknown, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      const accountId = String(headers["chatgpt-account-id"] ?? "");
+      const usedPercent = accountId === "acct_pinned" ? 70 : 10;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            rate_limit: {
+              allowed: true,
+              primary_window: { used_percent: usedPercent, reset_after_seconds: 60 },
+              secondary_window: { used_percent: usedPercent, reset_after_seconds: 3600 },
+            },
+          }),
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const harness = await createUsageHarness({
+      usageConfig: {
+        enabled: true,
+        refreshIntervalMs: 60000,
+        showOnlyOnSubscriptionModels: true,
+        showResetTimes: false,
+      },
+      model: {
+        provider: "openai-codex",
+        id: "gpt-5.6-sol",
+      } as unknown as ExtensionContext["model"],
+      isUsingOAuth: true,
+    });
+    await settleAsyncWork();
+
+    const service = fakeMultiproviderService();
+    harness.publishService(service.value);
+
+    // Resuming runs this extension's session_start before pi-multiprovider has
+    // replayed the session's switch journal, so the first paint shows the
+    // upstream account.
+    await emit(harness, "session_start");
+    await vi.waitFor(() => expect(widgetLine(harness)).toContain("5h: 90%"));
+
+    // The replay then restores the account and tells followers about it.
+    service.resolve(async () => ({
+      accessToken: codexJwt("acct_pinned"),
+      label: "Work",
+      source: "Work · Codex OAuth",
+    }));
+    service.notifyAccountChanged({
+      providerId: "openai-codex",
+      account: { id: "acct_pinned", label: "Work", authKind: "oauth" },
+      ctx: harness.ctx,
+    });
+
+    await vi.waitFor(() => expect(widgetLine(harness)).toContain("5h: 30%"));
+    expect(service.resolveActiveAccountAuth).toHaveBeenCalledWith(
+      "openai-codex",
+      harness.ctx,
+      expect.anything(),
+    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([, init]) =>
+          ((init?.headers ?? {}) as Record<string, string>)["chatgpt-account-id"] === "acct_pinned",
+      ),
+    ).toBe(true);
+    await emit(harness, "session_shutdown");
   });
 });
