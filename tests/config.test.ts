@@ -43,6 +43,7 @@ function withHome<T>(home: string, run: () => T): T {
 describe("config helpers", () => {
   test("exposes expected defaults", () => {
     expect(_test.CONFIG_BASENAME).toBe("pi-better-openai.json");
+    expect(_test.DEFAULT_CONFIG).not.toHaveProperty("supportedModels");
     expect(_test.DEFAULT_CONFIG.desiredActive).toBe(false);
     expect(_test.DEFAULT_CONFIG.usage?.autoRedeemBankedResets).toBe(true);
     expect(_test.DEFAULT_IMAGE_CONFIG.defaultModel).toBe("gpt-image-2.5");
@@ -74,6 +75,83 @@ describe("config helpers", () => {
     });
     expect(_test.parseModelKey("bad")).toBeUndefined();
     expect(_test.normalizeModelKeys(["openai/gpt-5.5", "bad", 42])).toEqual(["openai/gpt-5.5"]);
+  });
+
+  test("seeds config files without pinning supported models", () => {
+    withTempDir((tempDir) => {
+      const cwd = join(tempDir, "project");
+      const home = join(tempDir, "home");
+      withHome(home, () => {
+        const paths = _test.configPaths(cwd, home);
+        const resolved = _test.resolveConfig(cwd);
+
+        expect(readRawConfig(paths.global)).not.toHaveProperty("supportedModels");
+        expect(resolved.supportedModels.map((model) => `${model.provider}/${model.id}`)).toEqual([
+          ..._test.DEFAULT_SUPPORTED_MODELS,
+        ]);
+      });
+    });
+  });
+
+  test("migrates legacy seeded supported model snapshots to current defaults", () => {
+    const legacySnapshots = [
+      ["openai/gpt-5.4", "openai/gpt-5.5", "openai-codex/gpt-5.4", "openai-codex/gpt-5.5"],
+      [
+        "openai/gpt-5.4",
+        "openai/gpt-5.5",
+        "openai/gpt-5.6-sol",
+        "openai/gpt-5.6-terra",
+        "openai/gpt-5.6-luna",
+        "openai-codex/gpt-5.4",
+        "openai-codex/gpt-5.5",
+      ],
+      [
+        "openai/gpt-5.4",
+        "openai/gpt-5.5",
+        "openai-codex/gpt-5.6-sol",
+        "openai-codex/gpt-5.6-terra",
+        "openai-codex/gpt-5.6-luna",
+        "openai-codex/gpt-5.4",
+        "openai-codex/gpt-5.5",
+      ],
+    ];
+    withTempDir((tempDir) => {
+      const cwd = join(tempDir, "project");
+      const home = join(tempDir, "home");
+      withHome(home, () => {
+        const paths = _test.configPaths(cwd, home);
+        for (const snapshot of [...legacySnapshots, [...legacySnapshots[2]!].reverse()]) {
+          writeConfig(paths.global, { supportedModels: snapshot });
+          const resolved = _test.resolveConfig(cwd);
+
+          expect(resolved.supportedModels.map((model) => `${model.provider}/${model.id}`)).toEqual([
+            ..._test.DEFAULT_SUPPORTED_MODELS,
+          ]);
+          expect(resolved.supportedModels.some((model) => model.id === "gpt-6-astra")).toBe(true);
+        }
+      });
+    });
+  });
+
+  test("keeps customized supported model lists and project overrides", () => {
+    withTempDir((tempDir) => {
+      const cwd = join(tempDir, "project");
+      const home = join(tempDir, "home");
+      withHome(home, () => {
+        const paths = _test.configPaths(cwd, home);
+        writeConfig(paths.global, { supportedModels: ["openai/gpt-5.5", "openai-codex/gpt-5.5"] });
+        expect(
+          _test.resolveConfig(cwd).supportedModels.map((model) => `${model.provider}/${model.id}`),
+        ).toEqual(["openai/gpt-5.5", "openai-codex/gpt-5.5"]);
+
+        writeConfig(paths.project, {
+          supportedModels: ["openai/gpt-5.4", "openai/gpt-5.5", "openai-codex/gpt-5.4"],
+        });
+        expect(
+          _test.resolveConfig(cwd).supportedModels.map((model) => `${model.provider}/${model.id}`),
+        ).toEqual(["openai/gpt-5.4", "openai/gpt-5.5", "openai-codex/gpt-5.4"]);
+      });
+    });
   });
 
   test("migrates legacy chat models to the standalone image model", () => {

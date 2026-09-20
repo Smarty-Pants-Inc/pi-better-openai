@@ -45,6 +45,31 @@ export const DEFAULT_SUPPORTED_MODELS = [
   "openai-codex/gpt-5.5",
 ] as const;
 
+// Earlier versions seeded config files with an explicit copy of the then-current
+// default list. Treat those exact snapshots as unset so later additions to
+// DEFAULT_SUPPORTED_MODELS (such as gpt-6-astra) reach existing installs.
+const LEGACY_SEEDED_SUPPORTED_MODELS: readonly (readonly string[])[] = [
+  ["openai/gpt-5.4", "openai/gpt-5.5", "openai-codex/gpt-5.4", "openai-codex/gpt-5.5"],
+  [
+    "openai/gpt-5.4",
+    "openai/gpt-5.5",
+    "openai/gpt-5.6-sol",
+    "openai/gpt-5.6-terra",
+    "openai/gpt-5.6-luna",
+    "openai-codex/gpt-5.4",
+    "openai-codex/gpt-5.5",
+  ],
+  [
+    "openai/gpt-5.4",
+    "openai/gpt-5.5",
+    "openai-codex/gpt-5.6-sol",
+    "openai-codex/gpt-5.6-terra",
+    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-5.4",
+    "openai-codex/gpt-5.5",
+  ],
+];
+
 export type FooterMode = (typeof FOOTER_MODES)[number];
 export type ImageSaveMode = (typeof IMAGE_SAVE_MODES)[number];
 export type ImageOutputFormat = (typeof IMAGE_OUTPUT_FORMATS)[number];
@@ -194,11 +219,12 @@ export const DEFAULT_PET_CONFIG: Required<PetConfig> = {
 };
 
 export const DEFAULT_CONFIG: ConfigFile = {
+  // supportedModels is intentionally omitted so generated config files never pin
+  // the default list; resolution falls back to DEFAULT_SUPPORTED_MODELS live.
   persistState: true,
   notifyOnModelSwitch: true,
   active: false,
   desiredActive: false,
-  supportedModels: [...DEFAULT_SUPPORTED_MODELS],
   usage: DEFAULT_USAGE_CONFIG,
   footer: DEFAULT_FOOTER_CONFIG,
   image: DEFAULT_IMAGE_CONFIG,
@@ -631,6 +657,14 @@ export function parseModels(value: unknown): SupportedModel[] | undefined {
     .filter((entry): entry is SupportedModel => entry !== undefined);
 }
 
+function isLegacySeededSupportedModels(models: readonly SupportedModel[]): boolean {
+  return LEGACY_SEEDED_SUPPORTED_MODELS.some((snapshot) => {
+    if (snapshot.length !== models.length) return false;
+    const remaining = new Set(snapshot);
+    return models.every((model) => remaining.delete(`${model.provider}/${model.id}`));
+  });
+}
+
 export function readRawConfig(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
   try {
@@ -823,6 +857,7 @@ export function resolveConfig(cwd: string): ResolvedConfig {
   const merged = { ...DEFAULT_CONFIG, ...globalConfig, ...projectConfig };
   const selectedPath = projectConfigExists ? paths.project : paths.global;
   const desiredActive = merged.desiredActive ?? merged.active ?? false;
+  const configuredSupportedModels = parseModels(merged.supportedModels);
 
   return {
     configPath: selectedPath,
@@ -835,7 +870,9 @@ export function resolveConfig(cwd: string): ResolvedConfig {
     active: merged.active ?? desiredActive,
     desiredActive,
     supportedModels:
-      parseModels(merged.supportedModels) ?? parseModels(DEFAULT_SUPPORTED_MODELS) ?? [],
+      configuredSupportedModels && !isLegacySeededSupportedModels(configuredSupportedModels)
+        ? configuredSupportedModels
+        : (parseModels(DEFAULT_SUPPORTED_MODELS) ?? []),
     usage: {
       ...DEFAULT_USAGE_CONFIG,
       ...globalConfig.usage,
