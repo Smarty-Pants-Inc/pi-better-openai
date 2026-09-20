@@ -46,7 +46,16 @@ Usage display, image generation, and live voice require pi's `openai-codex` OAut
   - `/live` starts or stops realtime voice mode. `Ctrl+Shift+L` is the keyboard toggle.
   - `/pets [help|list|wake [slug]|tuck|select <slug>]` renders or manages custom pets from `${CODEX_HOME:-~/.codex}/pets`.
   - `/openai-usage` shows current OpenAI subscription usage.
+  - `/openai-resets` inspects and manually redeems a banked Codex reset.
   - `/openai-settings` opens settings, diagnostics, and config details.
+
+## Banked resets
+
+Unused banked Codex resets **auto-redeem by default, 5 minutes before expiry**, while an interactive pi session is running and Codex credentials are available. Starting pi within that final five-minute window also triggers the check; expired credits are skipped. This runs independently of the usage display and current model. The reset picker shows the auto-redemption note beside each eligible expiry. Disable **Auto-redeem banked resets** in `/openai-settings` or set `usage.autoRedeemBankedResets` to `false` to opt out.
+
+For safety, each attempt targets one explicit, freshly checked credit ID, with no fallback to another credit and no automatic retry after a consume request (including errors or `nothing_to_reset`). A persistent per-account guard permits at most one redemption attempt in five minutes across pi sessions sharing the same agent directory; manual redemption uses the same guard. Simultaneously expiring credits are not drained. Reservations live under `$PI_CODING_AGENT_DIR/pi-better-openai/reset-redemptions` (default `~/.pi/agent/pi-better-openai/reset-redemptions`); unreadable state or an orphaned lock blocks redemption rather than risking a duplicate. Separate machines/agent directories cannot coordinate this local guard.
+
+Pi must remain running and awake; this is not an OS-level scheduled task. No eligible usage window or unavailable credentials can prevent redemption.
 
 ## Configuration
 
@@ -84,7 +93,8 @@ Example config:
     "enabled": true,
     "refreshIntervalMs": 60000,
     "showOnlyOnSubscriptionModels": true,
-    "showResetTimes": true
+    "showResetTimes": true,
+    "autoRedeemBankedResets": true
   },
   "footer": {
     "mode": "status"

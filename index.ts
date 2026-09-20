@@ -72,10 +72,8 @@ import {
 } from "./src/usage.ts";
 import {
   buildBankedResetConfirmation,
-  consumeBankedReset,
   formatBankedResetChoice,
   formatConsumeOutcome,
-  newRedeemRequestId,
   selectBankedResetCredit,
 } from "./src/resets.ts";
 import { ResetController } from "./src/reset-controller.ts";
@@ -291,7 +289,12 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   let cachedSessionNameLeafId: string | null | undefined;
   let cachedSessionName: string | undefined;
   const usageController = new UsageController(config, updateFooter);
-  const resetController = new ResetController();
+  const resetController = new ResetController(
+    (ctx) => hasTerminalUI(ctx) && config(ctx).usage.autoRedeemBankedResets,
+    (ctx) => {
+      void usageController.refresh(ctx, ctx.model?.id, { force: true });
+    },
+  );
   const petController = new PetFooterController(config, updateFooter, () => footerInstalled);
   let multiproviderService: MultiproviderService | undefined;
   let unsubscribeMultiprovider: (() => void) | undefined;
@@ -444,6 +447,15 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   }
 
   async function redeemBankedReset(ctx: ExtensionContext): Promise<void> {
+    const resume = resetController.pauseAutoRedeem();
+    try {
+      await chooseBankedReset(ctx);
+    } finally {
+      resume();
+    }
+  }
+
+  async function chooseBankedReset(ctx: ExtensionContext): Promise<void> {
     if (!hasTerminalUI(ctx)) {
       ctx.ui.notify("/openai-resets requires an interactive TUI session.", "warning");
       return;
@@ -466,16 +478,26 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     const available = credits.credits.filter((credit) => credit.status === "available");
     let selected = selectBankedResetCredit(credits.credits);
     if (available.length > 1 && selected) {
-      const options = available.map((credit, index) => formatBankedResetChoice(credit, index));
+      const options = available.map((credit, index) =>
+        formatBankedResetChoice(credit, index, config(ctx).usage.autoRedeemBankedResets),
+      );
       const chosen = await ctx.ui.select("Redeem which banked reset?", options);
       if (chosen === undefined) {
         ctx.ui.notify("Banked reset redemption cancelled.", "info");
         return;
       }
-      selected = available[Math.max(0, options.indexOf(chosen))];
+      selected = available[options.indexOf(chosen)];
+    }
+    if (!selected) {
+      ctx.ui.notify(
+        "No individually identifiable banked reset is available; nothing was redeemed.",
+        "warning",
+      );
+      return;
     }
     const confirmation = buildBankedResetConfirmation({
       credit: selected,
+      autoRedeem: config(ctx).usage.autoRedeemBankedResets,
       availableCount: credits.availableCount,
       snapshot: usageController.snapshot,
     });
@@ -484,9 +506,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       return;
     }
     try {
-      const timeoutSignal = AbortSignal.timeout(15_000);
-      const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeoutSignal]) : timeoutSignal;
-      const result = await consumeBankedReset(ctx, selected?.id, newRedeemRequestId(), signal);
+      const result = await resetController.redeem(ctx, selected.id);
       const outcome = formatConsumeOutcome(result);
       ctx.ui.notify(outcome.message, outcome.level);
       void usageController.refresh(ctx, ctx.model?.id, { force: true });
@@ -1000,6 +1020,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       void petController.refresh(ctx, next);
     if (id.startsWith("usage.")) {
       usageController.restartAfterSettingsChange(ctx, next);
+      resetController.start(ctx);
     }
     updateFooter(ctx);
   }
@@ -1435,7 +1456,11 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     updateFooter(ctx);
     if (hasTerminalUI(ctx) && nextConfig.pets.enabled) void petController.refresh(ctx, nextConfig);
     usageController.start(ctx);
-    if (nextConfig.usage.enabled && isOpenAISubscriptionModel(ctx, nextConfig))
+    if (
+      hasTerminalUI(ctx) &&
+      (nextConfig.usage.autoRedeemBankedResets ||
+        (nextConfig.usage.enabled && isOpenAISubscriptionModel(ctx, nextConfig)))
+    )
       resetController.start(ctx);
     if (fastController.active) ctx.ui.notify(fastController.stateText(ctx, nextConfig), "info");
   });

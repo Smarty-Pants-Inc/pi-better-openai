@@ -59,6 +59,7 @@ export type UsageConfig = {
   showOnlyOnSubscriptionModels?: boolean;
   showResetTimes?: boolean;
   showBankedResets?: boolean;
+  autoRedeemBankedResets?: boolean;
 };
 
 export type FooterConfig = {
@@ -144,6 +145,7 @@ export const DEFAULT_USAGE_CONFIG: Required<UsageConfig> = {
   showOnlyOnSubscriptionModels: true,
   showResetTimes: true,
   showBankedResets: true,
+  autoRedeemBankedResets: true,
 };
 
 export const DEFAULT_FOOTER_CONFIG: Required<FooterConfig> = {
@@ -320,6 +322,16 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => String(cfg.usage.showBankedResets),
     values: ["true", "false"],
     description: "Show the available banked Codex reset count in the usage status line.",
+    parse: booleanSetting,
+  },
+  {
+    id: "usage.autoRedeemBankedResets",
+    section: "usage",
+    key: "autoRedeemBankedResets",
+    label: "Auto-redeem banked resets",
+    currentValue: (cfg) => String(cfg.usage.autoRedeemBankedResets),
+    values: ["true", "false"],
+    description: "Redeem one unused banked reset 5 minutes before expiry while pi is running.",
     parse: booleanSetting,
   },
 ];
@@ -659,6 +671,8 @@ export function readConfig(path: string): ConfigFile | undefined {
       config.usage.showResetTimes = parsed.usage.showResetTimes;
     if (typeof parsed.usage.showBankedResets === "boolean")
       config.usage.showBankedResets = parsed.usage.showBankedResets;
+    if (typeof parsed.usage.autoRedeemBankedResets === "boolean")
+      config.usage.autoRedeemBankedResets = parsed.usage.autoRedeemBankedResets;
   }
   if (
     isRecord(parsed.footer) &&

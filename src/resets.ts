@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getCodexCredentials } from "./codex-auth.ts";
+import { getCodexCredentials, type CodexCredentials } from "./codex-auth.ts";
 import { formatPercent, type UsageSnapshot } from "./usage.ts";
 
 export const RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 export const CONSUME_RESET_URL =
   "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
+
+export const BANKED_RESET_AUTO_REDEEM_LEAD_MS = 5 * 60_000;
 
 export type BankedResetStatus = "available" | "redeeming" | "redeemed" | "unknown";
 
@@ -129,6 +131,21 @@ export function selectBankedResetCredit(
   })[0];
 }
 
+export function selectAutoRedeemCredit(
+  credits: readonly BankedResetCredit[],
+  now = Date.now(),
+): BankedResetCredit | undefined {
+  return selectBankedResetCredit(
+    credits.filter(
+      (credit) =>
+        credit.resetType === "codex_rate_limits" &&
+        credit.expiresAtMs !== null &&
+        Number.isFinite(credit.expiresAtMs) &&
+        credit.expiresAtMs > now,
+    ),
+  );
+}
+
 function formatResetTimestamp(ms: number | null): string {
   if (ms === null) return "unknown";
   return new Date(ms).toLocaleString(undefined, {
@@ -139,13 +156,19 @@ function formatResetTimestamp(ms: number | null): string {
   });
 }
 
-export function formatBankedResetChoice(credit: BankedResetCredit, index: number): string {
+export function formatBankedResetChoice(
+  credit: BankedResetCredit,
+  index: number,
+  autoRedeem = false,
+): string {
   const title = credit.title ?? "Codex banked reset";
   const expires =
     credit.expiresAtMs === null
       ? "no expiry"
       : `expires ${formatResetTimestamp(credit.expiresAtMs)}`;
-  return `${index + 1}. ${title} · ${expires}`;
+  const note =
+    autoRedeem && selectAutoRedeemCredit([credit]) ? " · auto-redeems 5 min before expiry" : "";
+  return `${index + 1}. ${title} · ${expires}${note}`;
 }
 
 export function formatConsumeOutcome(result: ConsumeBankedResetResult): {
@@ -173,6 +196,7 @@ export function formatConsumeOutcome(result: ConsumeBankedResetResult): {
 export function buildBankedResetConfirmation(options: {
   credit?: BankedResetCredit;
   availableCount: number;
+  autoRedeem?: boolean;
   snapshot?: Pick<UsageSnapshot, "fiveHourLeftPercent" | "sevenDayLeftPercent">;
 }): { title: string; message: string } {
   const credit = options.credit;
@@ -181,7 +205,11 @@ export function buildBankedResetConfirmation(options: {
   lines.push("");
   if (credit?.grantedAtMs != null)
     lines.push(`Granted: ${formatResetTimestamp(credit.grantedAtMs)}`);
-  lines.push(`Expires: ${formatResetTimestamp(credit?.expiresAtMs ?? null)}`);
+  const autoNote =
+    options.autoRedeem && credit && selectAutoRedeemCredit([credit])
+      ? " · auto-redeems 5 min before expiry"
+      : "";
+  lines.push(`Expires: ${formatResetTimestamp(credit?.expiresAtMs ?? null)}${autoNote}`);
   lines.push(`Available: ${options.availableCount}`);
   const windows: string[] = [];
   if (options.snapshot?.fiveHourLeftPercent != null)
@@ -199,10 +227,11 @@ export function buildBankedResetConfirmation(options: {
 export async function requestBankedResetCredits(
   ctxOrSignal?: ExtensionContext | AbortSignal,
   signal?: AbortSignal,
+  pinnedCredentials?: CodexCredentials,
 ): Promise<BankedResetCredits | undefined> {
   const ctx = isAbortSignal(ctxOrSignal) ? undefined : ctxOrSignal;
   const requestSignal = isAbortSignal(ctxOrSignal) ? ctxOrSignal : signal;
-  const credentials = await getCodexCredentials(ctx, requestSignal);
+  const credentials = pinnedCredentials ?? (await getCodexCredentials(ctx, requestSignal));
   if (!credentials) return undefined;
   const response = await fetch(RESET_CREDITS_URL, {
     headers: {
@@ -221,8 +250,10 @@ export async function consumeBankedReset(
   creditId: string | undefined,
   redeemRequestId: string,
   signal?: AbortSignal,
+  pinnedCredentials?: CodexCredentials,
 ): Promise<ConsumeBankedResetResult> {
-  const credentials = await getCodexCredentials(ctx, signal);
+  const credentials = pinnedCredentials ?? (await getCodexCredentials(ctx, signal));
+  signal?.throwIfAborted();
   if (!credentials)
     throw new Error("OpenAI Codex authentication is unavailable. Run /login first.");
   const response = await fetch(CONSUME_RESET_URL, {

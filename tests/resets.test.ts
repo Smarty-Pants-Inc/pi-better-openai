@@ -101,7 +101,7 @@ function consumeCalls(fetchMock: ReturnType<typeof vi.fn>): unknown[][] {
   );
 }
 
-function stubResetsFetch(): ReturnType<typeof vi.fn> {
+function stubResetsFetch() {
   const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     void init;
     const url = String(input);
@@ -144,7 +144,7 @@ async function settleAsyncWork(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
-async function createResetsHarness(): Promise<{
+async function createResetsHarness(config: Record<string, unknown> = {}): Promise<{
   ctx: ExtensionContext;
   commands: Map<string, { handler: CommandHandler }>;
   handlers: Map<string, EventHandler[]>;
@@ -152,7 +152,7 @@ async function createResetsHarness(): Promise<{
   const cwd = createTempDir("pi-better-openai-resets-project-");
   const agentDir = createTempDir("pi-better-openai-resets-agent-");
   writeCodexAuth(agentDir);
-  writeProjectConfig(cwd, { usage: { enabled: true, refreshIntervalMs: 60000 } });
+  writeProjectConfig(cwd, { usage: { enabled: true, refreshIntervalMs: 60000 }, ...config });
   process.env.PI_CODING_AGENT_DIR = agentDir;
   vi.resetModules();
   const { default: betterOpenAI } = await import("../index.ts");
@@ -594,6 +594,62 @@ describe("/openai-resets command", () => {
     ];
     expect(confirmMessage).toContain("Reset B");
   });
+});
+
+describe("automatic reset extension wiring", () => {
+  test.each([true, false])(
+    "default on and opt-out (%s), even without usage display or an OpenAI model",
+    async (enabled) => {
+      const fetchMock = stubResetsFetch();
+      const harness = await createResetsHarness({
+        usage: { enabled: false, ...(enabled ? {} : { autoRedeemBankedResets: false }) },
+      });
+      harness.ctx.model = { provider: "anthropic", id: "test" } as ExtensionContext["model"];
+      const base = Date.now();
+      const response = creditsResponseBody();
+      response.credits[0]!.expires_at = new Date(base + 4 * 60_000).toISOString();
+      response.credits.push({ ...response.credits[0]!, id: "second_credit" });
+      response.available_count = 2;
+      const original = fetchMock.getMockImplementation()!;
+      fetchMock.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).endsWith("rate-limit-reset-credits"))
+          return new Response(JSON.stringify(response), { status: 200 });
+        return original(input, init);
+      });
+      vi.useFakeTimers({
+        toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+      });
+      vi.setSystemTime(base);
+      await emit(harness, "session_start");
+      await settleAsyncWork();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(consumeCalls(fetchMock)).toHaveLength(enabled ? 1 : 0);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(consumeCalls(fetchMock)).toHaveLength(enabled ? 1 : 0);
+      expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
+      await emit(harness, "session_shutdown");
+    },
+  );
+
+  test.each([true, false])(
+    "picker expiry notes respect auto-redemption setting (%s)",
+    async (enabled) => {
+      const fetchMock = stubResetsFetch();
+      const response = creditsResponseBody();
+      response.credits[0]!.expires_at = new Date(Date.now() + 86400_000).toISOString();
+      response.credits.push({ ...response.credits[0]!, id: "second_credit" });
+      response.available_count = 2;
+      fetchMock.mockResolvedValue(new Response(JSON.stringify(response), { status: 200 }));
+      const harness = await createResetsHarness({ usage: { autoRedeemBankedResets: enabled } });
+      vi.mocked(harness.ctx.ui.select).mockResolvedValue(undefined);
+      await harness.commands.get("openai-resets")?.handler("", harness.ctx);
+      const options = vi.mocked(harness.ctx.ui.select).mock.calls[0]![1];
+      expect(options.every((option) => option.includes("auto-redeems 5 min before expiry"))).toBe(
+        enabled,
+      );
+      expect(consumeCalls(fetchMock)).toHaveLength(0);
+    },
+  );
 });
 
 describe("ResetController caching", () => {

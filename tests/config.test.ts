@@ -44,6 +44,7 @@ describe("config helpers", () => {
   test("exposes expected defaults", () => {
     expect(_test.CONFIG_BASENAME).toBe("pi-better-openai.json");
     expect(_test.DEFAULT_CONFIG.desiredActive).toBe(false);
+    expect(_test.DEFAULT_CONFIG.usage?.autoRedeemBankedResets).toBe(true);
     expect(_test.DEFAULT_IMAGE_CONFIG.defaultModel).toBe("gpt-image-2.5");
     expect(_test.DEFAULT_IMAGE_CONFIG.defaultSave).toBe("project");
     expect(_test.DEFAULT_LIVE_CONFIG).toEqual({ enabled: true, voice: "sol" });
@@ -139,7 +140,12 @@ describe("config helpers", () => {
       withHome(home, () => {
         const paths = _test.configPaths(cwd, home);
         writeConfig(paths.global, {
-          usage: { enabled: false, refreshIntervalMs: 20000, showResetTimes: false },
+          usage: {
+            enabled: false,
+            refreshIntervalMs: 20000,
+            showResetTimes: false,
+            autoRedeemBankedResets: false,
+          },
           footer: { mode: "replace" },
           image: { defaultSave: "global", outputFormat: "jpeg", timeoutMs: 40000 },
           live: { enabled: false, voice: "spruce" },
@@ -164,6 +170,7 @@ describe("config helpers", () => {
           enabled: true,
           refreshIntervalMs: 20000,
           showResetTimes: false,
+          autoRedeemBankedResets: false,
         });
         expect(resolved.footer.mode).toBe("status");
         expect(resolved.image).toMatchObject({
@@ -225,6 +232,7 @@ describe("config helpers", () => {
     );
 
     expect(descriptors.get("usage.enabled")?.parse("true")).toBe(true);
+    expect(descriptors.get("usage.autoRedeemBankedResets")?.parse("false")).toBe(false);
     expect(descriptors.get("usage.refreshIntervalMs")?.parse("15000")).toBe(15000);
     expect(descriptors.get("footer.mode")?.parse("status")).toBe("status");
     expect(
@@ -260,6 +268,10 @@ describe("config helpers", () => {
       }),
     ).not.toHaveProperty("active");
 
+    expect(applySettingToRawConfig(raw, "usage.autoRedeemBankedResets", "false").usage).toEqual({
+      unknownUsage: true,
+      autoRedeemBankedResets: false,
+    });
     expect(applySettingToRawConfig(raw, "usage.refreshIntervalMs", "15000").usage).toEqual({
       unknownUsage: true,
       refreshIntervalMs: 15000,

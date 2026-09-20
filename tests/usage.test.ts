@@ -515,7 +515,10 @@ describe("usage polling lifecycle", () => {
     await settleAsyncWork();
     await emit(harness, "session_shutdown");
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    // Default-on reset automation is independent of the usage display.
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+    ]);
   });
 
   test("does not fetch usage for non-OAuth subscription-gated models", async () => {
@@ -533,7 +536,10 @@ describe("usage polling lifecycle", () => {
     await settleAsyncWork();
     await emit(harness, "session_shutdown");
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    // Codex reset automation can use its own auth regardless of the model.
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+    ]);
   });
 
   test("fetches usage for OAuth OpenAI models and updates status text", async () => {
