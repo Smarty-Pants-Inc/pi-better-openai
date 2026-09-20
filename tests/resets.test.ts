@@ -429,17 +429,20 @@ describe("banked reset network plumbing", () => {
     });
   });
 
-  test("omits the credit id when no specific credit was selected", async () => {
-    const agentDir = createTempDir("pi-better-openai-resets-agent-");
-    writeCodexAuth(agentDir);
-    const fetchMock = stubResetsFetch();
-    const resets = await importResetsWithAgentDir(agentDir);
+  test.each([undefined, "", " "])(
+    "rejects missing or blank credit IDs (%s) without a generic POST",
+    async (creditId) => {
+      const agentDir = createTempDir("pi-better-openai-resets-agent-");
+      writeCodexAuth(agentDir);
+      const fetchMock = stubResetsFetch();
+      const resets = await importResetsWithAgentDir(agentDir);
 
-    await resets.consumeBankedReset(undefined, undefined, "req-uuid");
-
-    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({ redeem_request_id: "req-uuid" });
-  });
+      await expect(resets.consumeBankedReset(undefined, creditId, "req-uuid")).rejects.toThrow(
+        "explicit",
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   test("does not call the network without credentials and fails the consume loudly", async () => {
     const agentDir = createTempDir("pi-better-openai-resets-agent-");
@@ -646,9 +649,7 @@ describe("automatic reset extension wiring", () => {
       vi.mocked(harness.ctx.ui.select).mockResolvedValue(undefined);
       await harness.commands.get("openai-resets")?.handler("", harness.ctx);
       const options = vi.mocked(harness.ctx.ui.select).mock.calls[0]![1];
-      expect(options.every((option) => option.includes("auto-redeems 5 min before expiry"))).toBe(
-        enabled,
-      );
+      expect(options.every((option) => option.includes("auto-redeems "))).toBe(enabled);
       expect(consumeCalls(fetchMock)).toHaveLength(0);
     },
   );

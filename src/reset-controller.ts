@@ -218,7 +218,16 @@ export class ResetController {
         credit.expiresAtMs - Date.now() > BANKED_RESET_AUTO_REDEEM_LEAD_MS
       )
         return;
-      if (!reserveBankedResetRedemption(credentials.accountId, credit.id)) return;
+      if (
+        !reserveBankedResetRedemption(credentials.accountId, credit.id, {
+          expiresAtMs: credit.expiresAtMs,
+        })
+      )
+        return;
+      // Filesystem contention or a clock adjustment must not turn a valid
+      // reservation into a POST for an expired or not-yet-due credit.
+      const remainingMs = credit.expiresAtMs - Date.now();
+      if (remainingMs <= 0 || remainingMs > BANKED_RESET_AUTO_REDEEM_LEAD_MS) return;
       const result = await consumeBankedReset(
         ctx,
         credit.id,

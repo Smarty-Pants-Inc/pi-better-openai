@@ -181,6 +181,27 @@ describe("automatic banked reset redemption (mocked transport only)", () => {
     expect(posts()).toHaveLength(0);
   });
 
+  test("never spends a not-yet-due credit after another instance spends the expiring one", async () => {
+    rows = [row(), row("later", NOW + 60 * 60_000)];
+    await Promise.all([start(), start(), start()]);
+    await vi.advanceTimersByTimeAsync(FIVE_MINUTES);
+    expect(posts()).toHaveLength(1);
+    rows[0]!.status = "redeemed";
+    await Promise.all([start(), start()]);
+    await vi.advanceTimersByTimeAsync(50 * 60_000 - 1);
+    expect(posts()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(posts()).toHaveLength(2);
+    expect(JSON.parse(posts()[1]![1]!.body as string).credit_id).toBe("later");
+  });
+
+  test("skips a cached due credit whose fresh expiry moved into the future", async () => {
+    await start();
+    rows[0]!.expires_at = NOW + 60 * 60_000;
+    await vi.advanceTimersByTimeAsync(FIVE_MINUTES);
+    expect(posts()).toHaveLength(0);
+  });
+
   test("can redeem a later independent expiry without draining the current batch", async () => {
     rows = [row(), row("later", NOW + 60 * 60_000)];
     await start();
@@ -284,6 +305,9 @@ describe("persistent single-credit reservation", () => {
     vi.advanceTimersByTime(FIVE_MINUTES);
     expect(reserveBankedResetRedemption("account-a", "credit-a")).toBe(false);
     expect(reserveBankedResetRedemption("account-a", "credit-b")).toBe(true);
+    vi.advanceTimersByTime(FIVE_MINUTES);
+    // An intervening credit must not erase the first uncertain attempt.
+    expect(reserveBankedResetRedemption("account-a", "credit-a")).toBe(false);
   });
 
   test.each(["corrupt", "lock"])("fails closed for %s safety state", (kind) => {
@@ -303,14 +327,33 @@ describe("persistent single-credit reservation", () => {
 });
 
 describe("expiry notes", () => {
-  test("shows the default-on note beside the picker and confirmation expiry", () => {
-    const credit = parseBankedResetCredits({ credits: [row()] }).credits[0]!;
-    expect(formatBankedResetChoice(credit, 0, true)).toMatch(
-      /expires .+ · auto-redeems 5 min before expiry$/,
-    );
-    expect(
-      buildBankedResetConfirmation({ credit, availableCount: 1, autoRedeem: true }).message,
-    ).toMatch(/Expires: .+ · auto-redeems 5 min before expiry/);
+  test("shows each credit's exact auto-redemption time, including date rollover", () => {
+    const afterMidnight = new Date(NOW);
+    afterMidnight.setDate(afterMidnight.getDate() + 1);
+    afterMidnight.setHours(0, 2, 0, 0);
+    const credits = parseBankedResetCredits({
+      credits: [
+        row("first", afterMidnight.getTime()),
+        row("later", afterMidnight.getTime() + 60 * 60_000),
+      ],
+    }).credits;
+    const labels = credits.map((credit, index) => {
+      const expected = new Date(credit.expiresAtMs! - FIVE_MINUTES).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+      const note = ` · auto-redeems ${expected}`;
+      const label = formatBankedResetChoice(credit, index, true);
+      expect(label.endsWith(note)).toBe(true);
+      expect(
+        buildBankedResetConfirmation({ credit, availableCount: 2, autoRedeem: true }).message,
+      ).toContain(note);
+      return label.split("auto-redeems ")[1];
+    });
+    expect(labels[0]).not.toBe(labels[1]);
+    const credit = credits[0]!;
     expect(formatBankedResetChoice(credit, 0, false)).not.toContain("auto-redeems");
     expect(formatBankedResetChoice({ ...credit, expiresAtMs: null }, 0, true)).not.toContain(
       "auto-redeems",

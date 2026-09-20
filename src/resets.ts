@@ -156,6 +156,12 @@ function formatResetTimestamp(ms: number | null): string {
   });
 }
 
+function formatAutoRedeemNote(credit: BankedResetCredit | undefined, enabled = false): string {
+  if (!enabled || !credit || !selectAutoRedeemCredit([credit]) || credit.expiresAtMs === null)
+    return "";
+  return ` · auto-redeems ${formatResetTimestamp(credit.expiresAtMs - BANKED_RESET_AUTO_REDEEM_LEAD_MS)}`;
+}
+
 export function formatBankedResetChoice(
   credit: BankedResetCredit,
   index: number,
@@ -166,8 +172,7 @@ export function formatBankedResetChoice(
     credit.expiresAtMs === null
       ? "no expiry"
       : `expires ${formatResetTimestamp(credit.expiresAtMs)}`;
-  const note =
-    autoRedeem && selectAutoRedeemCredit([credit]) ? " · auto-redeems 5 min before expiry" : "";
+  const note = formatAutoRedeemNote(credit, autoRedeem);
   return `${index + 1}. ${title} · ${expires}${note}`;
 }
 
@@ -205,10 +210,7 @@ export function buildBankedResetConfirmation(options: {
   lines.push("");
   if (credit?.grantedAtMs != null)
     lines.push(`Granted: ${formatResetTimestamp(credit.grantedAtMs)}`);
-  const autoNote =
-    options.autoRedeem && credit && selectAutoRedeemCredit([credit])
-      ? " · auto-redeems 5 min before expiry"
-      : "";
+  const autoNote = formatAutoRedeemNote(credit, options.autoRedeem);
   lines.push(`Expires: ${formatResetTimestamp(credit?.expiresAtMs ?? null)}${autoNote}`);
   lines.push(`Available: ${options.availableCount}`);
   const windows: string[] = [];
@@ -252,6 +254,7 @@ export async function consumeBankedReset(
   signal?: AbortSignal,
   pinnedCredentials?: CodexCredentials,
 ): Promise<ConsumeBankedResetResult> {
+  if (!creditId?.trim()) throw new Error("An explicit banked reset credit is required.");
   const credentials = pinnedCredentials ?? (await getCodexCredentials(ctx, signal));
   signal?.throwIfAborted();
   if (!credentials)
@@ -264,11 +267,7 @@ export async function consumeBankedReset(
       "chatgpt-account-id": credentials.accountId,
       "content-type": "application/json",
     },
-    body: JSON.stringify(
-      creditId
-        ? { credit_id: creditId, redeem_request_id: redeemRequestId }
-        : { redeem_request_id: redeemRequestId },
-    ),
+    body: JSON.stringify({ credit_id: creditId, redeem_request_id: redeemRequestId }),
     signal,
   });
   if (!response.ok) throw new Error(`Codex reset consume request failed (${response.status})`);
