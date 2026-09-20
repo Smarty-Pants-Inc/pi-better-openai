@@ -473,6 +473,8 @@ describe("banked reset network plumbing", () => {
 });
 
 describe("/openai-resets command", () => {
+  // The first harness cold-imports the full extension and its dependencies.
+  // Parallel full-suite runs can spend over five seconds in module loading.
   test("offers no confirmation when no banked credits are available", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       void init;
@@ -494,7 +496,7 @@ describe("/openai-resets command", () => {
       "info",
     );
     expect(consumeCalls(fetchMock)).toHaveLength(0);
-  });
+  }, 15_000);
 
   test("requires explicit confirmation and sends nothing when declined", async () => {
     const fetchMock = stubResetsFetch();
