@@ -612,7 +612,7 @@ describe("automatic reset extension wiring", () => {
       harness.ctx.model = { provider: "anthropic", id: "test" } as ExtensionContext["model"];
       const base = Date.now();
       const response = creditsResponseBody();
-      response.credits[0]!.expires_at = new Date(base + 4 * 60_000).toISOString();
+      response.credits[0]!.expires_at = new Date(base + 1_000).toISOString();
       response.credits.push({ ...response.credits[0]!, id: "second_credit" });
       response.available_count = 2;
       const original = fetchMock.getMockImplementation()!;

@@ -20,7 +20,8 @@ import {
 vi.mock("../src/codex-auth.ts", () => ({ getCodexCredentials: vi.fn() }));
 
 const NOW = Date.parse("2026-09-21T00:00:00Z");
-const FIVE_MINUTES = BANKED_RESET_AUTO_REDEEM_LEAD_MS;
+const LEAD_MS = BANKED_RESET_AUTO_REDEEM_LEAD_MS;
+const LATER_DUE_DELAY_MS = 60 * 60_000 - 2 * LEAD_MS;
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 let agentDir: string;
 let controllers: ResetController[];
@@ -31,7 +32,7 @@ let availableCount: number;
 let applicableCount: number | undefined;
 let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
-function row(id = "first", expires = NOW + 10 * 60_000): Record<string, unknown> {
+function row(id = "first", expires = NOW + 2 * LEAD_MS): Record<string, unknown> {
   return { id, status: "available", reset_type: "codex_rate_limits", expires_at: expires };
 }
 
@@ -99,10 +100,10 @@ afterEach(() => {
 });
 
 describe("automatic banked reset redemption (mocked transport only)", () => {
-  test("waits until exactly five minutes before expiry and spends only one explicit credit", async () => {
+  test("waits until exactly the auto-redeem lead before expiry and spends only one explicit credit", async () => {
     const onRedeemed = vi.fn();
     const target = await start(controller(() => true, onRedeemed));
-    await vi.advanceTimersByTimeAsync(FIVE_MINUTES - 1);
+    await vi.advanceTimersByTimeAsync(LEAD_MS - 1);
     expect(posts()).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
     expect(posts()).toHaveLength(1);
@@ -125,13 +126,13 @@ describe("automatic banked reset redemption (mocked transport only)", () => {
     "http-error",
     "malformed",
   ])("never retries or falls back after %s, including a new controller/reload", async (code) => {
-    rows = [row("first", NOW + FOUR_MINUTES), row("second", NOW + FOUR_MINUTES)];
+    rows = [row("first", NOW + INSIDE_LEAD_MS), row("second", NOW + INSIDE_LEAD_MS)];
     outcome = code;
     await start();
     expect(posts()).toHaveLength(1);
     // Simulate the first credit disappearing after an ambiguous result. A
     // second process must not burn the next one from its fresh snapshot.
-    rows = [row("second", NOW + FOUR_MINUTES)];
+    rows = [row("second", NOW + INSIDE_LEAD_MS)];
     await start();
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(posts()).toHaveLength(1);
@@ -146,14 +147,14 @@ describe("automatic banked reset redemption (mocked transport only)", () => {
 
   test("handles multiple concurrent controllers with a shared account guard", async () => {
     await Promise.all([start(), start()]);
-    await vi.advanceTimersByTimeAsync(FIVE_MINUTES);
+    await vi.advanceTimersByTimeAsync(LEAD_MS);
     expect(posts()).toHaveLength(1);
   });
 
   test.each(["disabled", "missing-auth", "unavailable", "inapplicable"])(
     "skips %s",
     async (reason) => {
-      rows = [row("first", NOW + FOUR_MINUTES)];
+      rows = [row("first", NOW + INSIDE_LEAD_MS)];
       if (reason === "missing-auth") vi.mocked(getCodexCredentials).mockResolvedValue(undefined);
       if (reason === "unavailable") availableCount = 0;
       if (reason === "inapplicable") applicableCount = 0;
@@ -184,11 +185,11 @@ describe("automatic banked reset redemption (mocked transport only)", () => {
   test("never spends a not-yet-due credit after another instance spends the expiring one", async () => {
     rows = [row(), row("later", NOW + 60 * 60_000)];
     await Promise.all([start(), start(), start()]);
-    await vi.advanceTimersByTimeAsync(FIVE_MINUTES);
+    await vi.advanceTimersByTimeAsync(LEAD_MS);
     expect(posts()).toHaveLength(1);
     rows[0]!.status = "redeemed";
     await Promise.all([start(), start()]);
-    await vi.advanceTimersByTimeAsync(50 * 60_000 - 1);
+    await vi.advanceTimersByTimeAsync(LATER_DUE_DELAY_MS - 1);
     expect(posts()).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(posts()).toHaveLength(2);
@@ -198,16 +199,16 @@ describe("automatic banked reset redemption (mocked transport only)", () => {
   test("skips a cached due credit whose fresh expiry moved into the future", async () => {
     await start();
     rows[0]!.expires_at = NOW + 60 * 60_000;
-    await vi.advanceTimersByTimeAsync(FIVE_MINUTES);
+    await vi.advanceTimersByTimeAsync(LEAD_MS);
     expect(posts()).toHaveLength(0);
   });
 
   test("can redeem a later independent expiry without draining the current batch", async () => {
     rows = [row(), row("later", NOW + 60 * 60_000)];
     await start();
-    await vi.advanceTimersByTimeAsync(FIVE_MINUTES);
+    await vi.advanceTimersByTimeAsync(LEAD_MS);
     expect(posts()).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(50 * 60_000);
+    await vi.advanceTimersByTimeAsync(LATER_DUE_DELAY_MS);
     expect(posts()).toHaveLength(2);
     expect(JSON.parse(posts()[1]![1]!.body as string).credit_id).toBe("later");
   });
@@ -215,7 +216,7 @@ describe("automatic banked reset redemption (mocked transport only)", () => {
   test("a manual picker pauses automatic spending and manual redemption uses the same guard", async () => {
     const target = await start();
     const resume = target.pauseAutoRedeem();
-    await vi.advanceTimersByTimeAsync(FIVE_MINUTES);
+    await vi.advanceTimersByTimeAsync(LEAD_MS);
     expect(posts()).toHaveLength(0);
     await target.redeem(ctx, "second");
     resume();
@@ -247,7 +248,7 @@ describe("automatic banked reset redemption (mocked transport only)", () => {
     const target = await start(controller(() => enabled));
     let release!: (response: Response) => void;
     // Avoid the TTL poll so this delayed GET is the redemption preflight.
-    await vi.advanceTimersByTimeAsync(FIVE_MINUTES - 1000);
+    await vi.advanceTimersByTimeAsync(LEAD_MS - 1000);
     await target.refresh(ctx, { force: true });
     fetchMock.mockImplementationOnce(
       () =>
@@ -266,7 +267,7 @@ describe("automatic banked reset redemption (mocked transport only)", () => {
 
   test("pins credentials between preflight and consume even if the active account changes", async () => {
     await start();
-    await vi.advanceTimersByTimeAsync(FIVE_MINUTES - 1000);
+    await vi.advanceTimersByTimeAsync(LEAD_MS - 1000);
     const target = controllers[0]!;
     await target.refresh(ctx, { force: true });
     const implementation = fetchMock.getMockImplementation()!;
@@ -288,7 +289,7 @@ describe("automatic banked reset redemption (mocked transport only)", () => {
   });
 });
 
-const FOUR_MINUTES = 4 * 60_000;
+const INSIDE_LEAD_MS = LEAD_MS - 1_000;
 
 describe("persistent single-credit reservation", () => {
   test("reserves before outcomes, scopes by account and stores no auth or raw identifiers", () => {
@@ -302,10 +303,10 @@ describe("persistent single-credit reservation", () => {
       expect(text).not.toContain("credit-a");
       expect(text).not.toContain("fake-token");
     }
-    vi.advanceTimersByTime(FIVE_MINUTES);
+    vi.advanceTimersByTime(LEAD_MS);
     expect(reserveBankedResetRedemption("account-a", "credit-a")).toBe(false);
     expect(reserveBankedResetRedemption("account-a", "credit-b")).toBe(true);
-    vi.advanceTimersByTime(FIVE_MINUTES);
+    vi.advanceTimersByTime(LEAD_MS);
     // An intervening credit must not erase the first uncertain attempt.
     expect(reserveBankedResetRedemption("account-a", "credit-a")).toBe(false);
   });
@@ -314,7 +315,7 @@ describe("persistent single-credit reservation", () => {
     expect(reserveBankedResetRedemption("account", "first")).toBe(true);
     const dir = join(agentDir, "pi-better-openai", "reset-redemptions");
     const path = join(dir, readdirSync(dir)[0]!);
-    vi.advanceTimersByTime(FIVE_MINUTES);
+    vi.advanceTimersByTime(LEAD_MS);
     if (kind === "corrupt") {
       writeFileSync(path, "{broken");
       expect(() => reserveBankedResetRedemption("account", "second")).toThrow("safety reservation");
@@ -338,7 +339,7 @@ describe("expiry notes", () => {
       ],
     }).credits;
     const labels = credits.map((credit, index) => {
-      const expected = new Date(credit.expiresAtMs! - FIVE_MINUTES).toLocaleString(undefined, {
+      const expected = new Date(credit.expiresAtMs! - LEAD_MS).toLocaleString(undefined, {
         month: "short",
         day: "numeric",
         hour: "numeric",

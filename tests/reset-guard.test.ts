@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { reserveBankedResetRedemption } from "../src/reset-guard.ts";
+import { BANKED_RESET_AUTO_REDEEM_LEAD_MS } from "../src/resets.ts";
 
-const FIVE_MINUTES = 5 * 60_000;
+const LEAD_MS = BANKED_RESET_AUTO_REDEEM_LEAD_MS;
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 let agentDir: string;
 
@@ -23,8 +24,8 @@ afterEach(() => {
 });
 
 describe("due-only durable reservations", () => {
-  test.each([-1, 0, FIVE_MINUTES + 1, Number.NaN, Number.POSITIVE_INFINITY])(
-    "rejects automatic reservations outside the final five minutes (%s)",
+  test.each([-1, 0, LEAD_MS + 1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects automatic reservations outside the final lead window (%s)",
     (offset) => {
       vi.useFakeTimers();
       const now = Date.now();
@@ -33,7 +34,7 @@ describe("due-only durable reservations", () => {
       ).toBe(false);
       // Rejections must not claim the account or credit.
       expect(
-        reserveBankedResetRedemption("fake-account", "future", { expiresAtMs: now + FIVE_MINUTES }),
+        reserveBankedResetRedemption("fake-account", "future", { expiresAtMs: now + LEAD_MS }),
       ).toBe(true);
     },
   );
@@ -50,11 +51,11 @@ describe("due-only durable reservations", () => {
     );
     writeFileSync(
       path,
-      JSON.stringify({ blockedUntilMs: Date.now() + FIVE_MINUTES, creditHash: digest("first") }),
+      JSON.stringify({ blockedUntilMs: Date.now() + LEAD_MS, creditHash: digest("first") }),
     );
-    vi.advanceTimersByTime(FIVE_MINUTES);
+    vi.advanceTimersByTime(LEAD_MS);
     expect(reserveBankedResetRedemption("fake-account", "second")).toBe(true);
-    vi.advanceTimersByTime(FIVE_MINUTES);
+    vi.advanceTimersByTime(LEAD_MS);
     expect(reserveBankedResetRedemption("fake-account", "first")).toBe(false);
     expect(JSON.parse(readFileSync(path, "utf8")).attemptedCreditHashes).toEqual([
       digest("first"),
@@ -69,7 +70,7 @@ describe("due-only durable reservations", () => {
     const path = join(agentDir, "pi-better-openai", "reset-redemptions", `${hash}.json`);
     const state = JSON.parse(readFileSync(path, "utf8"));
     writeFileSync(path, JSON.stringify({ ...state, attemptedCreditHashes: [null] }));
-    vi.advanceTimersByTime(FIVE_MINUTES);
+    vi.advanceTimersByTime(LEAD_MS);
     expect(() => reserveBankedResetRedemption("fake-account", "second")).toThrow(
       "safety reservation",
     );
@@ -88,7 +89,7 @@ describe("independent pi process coordination (no HTTP or credentials)", () => {
         expiresAtMs: Number(process.env.RESET_TEST_EXPIRY),
       }));
     `;
-      const expiresAtMs = String(Date.now() + FOUR_MINUTES);
+      const expiresAtMs = String(Date.now() + INSIDE_LEAD_MS);
       const results = await Promise.all(
         Array.from(
           { length: 8 },
@@ -120,4 +121,4 @@ describe("independent pi process coordination (no HTTP or credentials)", () => {
   );
 });
 
-const FOUR_MINUTES = 4 * 60_000;
+const INSIDE_LEAD_MS = LEAD_MS - 1_000;
