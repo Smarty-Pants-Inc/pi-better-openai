@@ -37,6 +37,8 @@ export interface LiveTransportCallbacks {
 
 export interface LiveTransportOptions {
   getCredentials(signal?: AbortSignal): Promise<CodexCredentials | undefined>;
+  /** Gateway root (for example a CLIProxyAPI origin) serving `/v1/live`; direct Codex when unset. */
+  baseUrl?: string;
   sessionId: string;
   instructions: string;
   voice: string;
@@ -85,9 +87,22 @@ export function parseLiveCallId(location: string | null): string | undefined {
     .find((segment) => LIVE_CALL_ID_PATTERN.test(segment));
 }
 
-export function buildLiveSidebandUrl(callId: string): string {
-  const url = new URL(`https://api.openai.com/v1/live/${encodeURIComponent(callId)}`);
-  url.protocol = "wss:";
+/** Maps a provider base URL such as `https://gateway/v1` to the gateway root. */
+export function liveGatewayRoot(providerBaseUrl: string): string {
+  const url = new URL(providerBaseUrl);
+  url.pathname = url.pathname.replace(/\/+$/, "").replace(/\/v1$/, "");
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/+$/, "");
+}
+
+export function buildLiveSignalingUrl(baseUrl?: string): string {
+  return baseUrl ? `${baseUrl}/v1/live` : SIGNALING_URL;
+}
+
+export function buildLiveSidebandUrl(callId: string, baseUrl = "https://api.openai.com"): string {
+  const url = new URL(`${baseUrl}/v1/live/${encodeURIComponent(callId)}`);
+  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
   return url.toString();
 }
 
@@ -106,8 +121,9 @@ export function buildLiveHeaders(
     version: CODEX_CLIENT_VERSION,
     "session-id": sessionId,
     "thread-id": sessionId,
-    "chatgpt-account-id": credentials.accountId,
   };
+  // A gateway selects the ChatGPT account itself and sends an empty account ID.
+  if (credentials.accountId) headers["chatgpt-account-id"] = credentials.accountId;
   if (attestation) headers["x-oai-attestation"] = attestation;
   return headers;
 }
@@ -186,7 +202,11 @@ export class CodexLiveTransport {
   async #signal(offer: string): Promise<LiveSignalingResult> {
     const credentials = await this.#options.getCredentials(this.#operationSignal);
     if (!credentials) {
-      throw new Error("Missing openai-codex OAuth credentials. Run /login openai-codex.");
+      throw new Error(
+        this.#options.baseUrl
+          ? "Missing the API key for the configured live provider."
+          : "Missing openai-codex OAuth credentials. Run /login openai-codex.",
+      );
     }
     const attestation = await generateCodexAttestation(this.#native);
     const headers = buildLiveHeaders(
@@ -195,10 +215,11 @@ export class CodexLiveTransport {
       this.#realtimeSessionId,
       attestation,
     );
-    const proxyUrl = getProxyForUrl(SIGNALING_URL);
+    const signalingUrl = buildLiveSignalingUrl(this.#options.baseUrl);
+    const proxyUrl = getProxyForUrl(signalingUrl);
     const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
     try {
-      const response = await undiciFetch(SIGNALING_URL, {
+      const response = await undiciFetch(signalingUrl, {
         method: "POST",
         headers: {
           ...headers,
@@ -254,7 +275,7 @@ export class CodexLiveTransport {
     credentials: CodexCredentials,
     attestation: string | undefined,
   ): Promise<void> {
-    const url = buildLiveSidebandUrl(callId);
+    const url = buildLiveSidebandUrl(callId, this.#options.baseUrl);
     const proxyUrl = getProxyForUrl(url);
     const socket = new WebSocket(url, {
       headers: buildLiveHeaders(

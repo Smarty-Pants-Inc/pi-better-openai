@@ -17,6 +17,7 @@ import type {
   LiveFloorArbiterLike,
   LiveFloorArbiterOptions,
 } from "../src/live/queue.ts";
+import { DEFAULT_LIVE_CONFIG } from "../src/config.ts";
 import { LIVE_VISUALIZER_TOGGLE_KEY } from "../src/live/visualizer.ts";
 import { makeResolvedConfig } from "./helpers.ts";
 
@@ -178,7 +179,7 @@ describe("registerOpenAILive", () => {
   test("rejects non-TUI and disabled invocations before opening custom UI", async () => {
     const harness = createRegistrationHarness();
     registerOpenAILive(harness.pi, () =>
-      makeResolvedConfig({ live: { enabled: false, voice: "sol" } }),
+      makeResolvedConfig({ live: { ...DEFAULT_LIVE_CONFIG, enabled: false, voice: "sol" } }),
     );
     const notify = vi.fn();
     const custom = vi.fn();
@@ -208,7 +209,7 @@ describe("registerOpenAILive", () => {
     const notifyUnfocused = vi.fn();
     registerOpenAILive(
       harness.pi,
-      () => makeResolvedConfig({ live: { enabled: true, voice: "vale" } }),
+      () => makeResolvedConfig({ live: { ...DEFAULT_LIVE_CONFIG, enabled: true, voice: "vale" } }),
       {
         createSession: (options) => {
           const stub = makeSessionStub(options);
@@ -251,7 +252,7 @@ describe("registerOpenAILive", () => {
     const arbiter = makeFakeArbiter();
     registerOpenAILive(
       harness.pi,
-      () => makeResolvedConfig({ live: { enabled: true, voice: "sol" } }),
+      () => makeResolvedConfig({ live: { ...DEFAULT_LIVE_CONFIG, enabled: true, voice: "sol" } }),
       {
         createSession: (options) => {
           const stub = makeSessionStub(options);
@@ -303,7 +304,7 @@ describe("registerOpenAILive", () => {
     const notifyUnfocused = vi.fn();
     registerOpenAILive(
       harness.pi,
-      () => makeResolvedConfig({ live: { enabled: true, voice: "sol" } }),
+      () => makeResolvedConfig({ live: { ...DEFAULT_LIVE_CONFIG, enabled: true, voice: "sol" } }),
       {
         createSession: (options) => {
           const stub = makeSessionStub(options);

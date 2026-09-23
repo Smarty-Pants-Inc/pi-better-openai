@@ -1,6 +1,6 @@
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { getCodexCredentials } from "../codex-auth.ts";
+import { type CodexCredentials, getCodexCredentials } from "../codex-auth.ts";
 import type { ResolvedConfig } from "../config.ts";
 import { sanitizeDiagnosticError } from "../format.ts";
 import {
@@ -17,6 +17,12 @@ import {
   type LiveFloorArbiterLike,
   type LiveFloorArbiterOptions,
 } from "./queue.ts";
+import {
+  type BrowserLiveAudio,
+  readOrCreateBrowserToken,
+  startBrowserLiveAudio,
+} from "./browser.ts";
+import { liveGatewayRoot } from "./transport.ts";
 import { LiveVisualizer, LIVE_VISUALIZER_TOGGLE_KEY } from "./visualizer.ts";
 
 export const LIVE_COMMAND = "live";
@@ -96,6 +102,33 @@ function errorFrom(cause: unknown): Error {
   return cause instanceof Error ? cause : new Error(String(cause));
 }
 
+export type LiveProviderRoute = {
+  baseUrl: string;
+  getCredentials(): Promise<CodexCredentials | undefined>;
+};
+
+/**
+ * Routes live traffic through a configured pi provider (for example CLIProxyAPI)
+ * using that provider's base URL and API key. The gateway owns ChatGPT OAuth and
+ * account selection, so the account ID stays empty.
+ */
+export function resolveLiveProviderRoute(
+  ctx: Pick<ExtensionContext, "modelRegistry">,
+  provider: string,
+): LiveProviderRoute {
+  const model = ctx.modelRegistry.getAll().find((candidate) => candidate.provider === provider);
+  if (!model?.baseUrl) {
+    throw new Error(`Live provider "${provider}" has no model with a base URL in pi.`);
+  }
+  return {
+    baseUrl: liveGatewayRoot(model.baseUrl),
+    getCredentials: async () => {
+      const apiKey = await ctx.modelRegistry.getApiKeyForProvider(provider);
+      return apiKey ? { accessToken: apiKey, accountId: "" } : undefined;
+    },
+  };
+}
+
 export function registerOpenAILive(
   pi: ExtensionAPI,
   getConfig: (ctx: ExtensionContext) => ResolvedConfig,
@@ -134,6 +167,28 @@ export function registerOpenAILive(
       return;
     }
     if (settling) await settling;
+
+    let route: LiveProviderRoute | undefined;
+    let browserAudio: BrowserLiveAudio | undefined;
+    try {
+      if (cfg.live.provider) route = resolveLiveProviderRoute(ctx, cfg.live.provider);
+      if (cfg.live.audio === "browser") {
+        browserAudio = await startBrowserLiveAudio({
+          port: cfg.live.browserPort,
+          token: readOrCreateBrowserToken(),
+        });
+      }
+    } catch (cause) {
+      const message = errorFrom(cause).message;
+      ctx.ui.notify(sanitizeDiagnosticError(`Live voice could not start: ${message}`), "error");
+      return;
+    }
+    if (browserAudio) {
+      ctx.ui.notify(
+        `Live audio page: ${browserAudio.url} (remote pi: ssh -L ${cfg.live.browserPort}:127.0.0.1:${cfg.live.browserPort})`,
+        "info",
+      );
+    }
 
     const result = await ctx.ui.custom<LiveUiResult>((tui, theme, _keybindings, done) => {
       let completed = false;
@@ -179,7 +234,9 @@ export function registerOpenAILive(
         const created = createSession({
           sessionId: ctx.sessionManager.getSessionId(),
           voice: cfg.live.voice,
-          getCredentials: (signal) => getCodexCredentials(ctx, signal),
+          getCredentials: route?.getCredentials ?? ((signal) => getCodexCredentials(ctx, signal)),
+          ...(route ? { baseUrl: route.baseUrl } : {}),
+          ...(browserAudio ? { native: browserAudio.native } : {}),
           delegate: (request) => {
             pi.sendMessage(
               {
@@ -221,6 +278,7 @@ export function registerOpenAILive(
         const current = session;
         session = undefined;
         if (current) await current.stop().catch(() => undefined);
+        await browserAudio?.close().catch(() => undefined);
       };
 
       const run: ActiveLiveRun = {
