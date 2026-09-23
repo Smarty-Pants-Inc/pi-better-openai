@@ -1,9 +1,9 @@
 import {
+  CustomEditor,
   type ExtensionAPI,
   type ExtensionContext,
-  type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Text, type TUI } from "@earendil-works/pi-tui";
+import { type Component, Text, type TUI } from "@earendil-works/pi-tui";
 import { type CodexCredentials, getCodexCredentials } from "../codex-auth.ts";
 import type { ResolvedConfig } from "../config.ts";
 import { sanitizeDiagnosticError } from "../format.ts";
@@ -27,10 +27,14 @@ import {
   startBrowserLiveAudio,
 } from "./browser.ts";
 import { liveGatewayRoot } from "./transport.ts";
-import { LiveVisualizer, LIVE_VISUALIZER_TOGGLE_KEY, liveKeyAction } from "./visualizer.ts";
+import {
+  decorateEditorWithLive,
+  LiveVisualizer,
+  LIVE_VISUALIZER_TOGGLE_KEY,
+  liveKeyAction,
+} from "./visualizer.ts";
 
 export const LIVE_COMMAND = "live";
-export const LIVE_WIDGET_KEY = "better-openai-live";
 export const LIVE_DELEGATION_MESSAGE_TYPE = "better-openai-live-delegation";
 export const LIVE_FOCUS_SETTLE_MS = 400;
 
@@ -106,6 +110,37 @@ function messageText(content: unknown): string {
     )
     .map((item) => item.text)
     .join("\n");
+}
+
+type EditorFactory = NonNullable<Parameters<ExtensionContext["ui"]["setEditorComponent"]>[0]>;
+
+type HistoryEditor = { addToHistory?(text: string): void };
+
+/** Pi fills a new editor's history from the session's user messages; do the same for ours. */
+function sessionPrompts(ctx: ExtensionContext): string[] {
+  const entries = ctx.sessionManager.getBranch?.() ?? [];
+  return entries.flatMap((entry) =>
+    entry.type === "message" && entry.message.role === "user"
+      ? [messageText(entry.message.content)]
+      : [],
+  );
+}
+
+/**
+ * Finds the mounted editor so prompts typed during the call stay in its up-arrow history.
+ * ponytail: Pi has no API for the restored editor instance; this walks the public
+ * Container.children tree and adds only through the public addToHistory. If it finds no
+ * editor, only those in-call history entries are missing.
+ */
+function findMountedEditor(root: Component, skip: object): HistoryEditor | undefined {
+  const stack: unknown[] = [root];
+  for (let visited = 0; stack.length > 0 && visited < 500; visited += 1) {
+    const node = stack.pop() as (HistoryEditor & { children?: unknown }) | undefined;
+    if (!node || typeof node !== "object") continue;
+    if (node !== skip && typeof node.addToHistory === "function") return node;
+    if (Array.isArray(node.children)) stack.push(...(node.children as unknown[]));
+  }
+  return undefined;
 }
 
 function errorFrom(cause: unknown): Error {
@@ -215,8 +250,9 @@ export function registerOpenAILive(
     let done: (result: LiveUiResult) => void = () => undefined;
     const ui = new Promise<LiveUiResult>((resolve) => (done = resolve));
     let removeKeys: (() => void) | undefined;
-    // A widget, not ctx.ui.custom, so Pi's editor stays usable during the call.
-    const createWidget = (tui: TUI, theme: Theme): LiveVisualizer => {
+    // The status sits on the editor's top border: the call adds no rows and Pi's editor keeps
+    // the keyboard. startRun runs once, from the first editor the factory builds.
+    const startRun = (tui: TUI): LiveVisualizer => {
       let completed = false;
       let disposed = false;
       let session: LiveSessionRuntime | undefined;
@@ -233,7 +269,7 @@ export function registerOpenAILive(
       };
 
       const visualizer = new LiveVisualizer({
-        theme,
+        theme: ctx.ui.theme,
         requestRender: () => tui.requestRender(),
       });
       visualizer.setPhase("standby");
@@ -375,10 +411,49 @@ export function registerOpenAILive(
       });
       return visualizer;
     };
+
+    let visualizer: LiveVisualizer | undefined;
+    let liveTui: TUI | undefined;
+    let liveEditor: object | undefined;
+    let undecorate: (() => void) | undefined;
+    const inCallPrompts: string[] = [];
+    const previousEditor = ctx.ui.getEditorComponent();
+    // Wrap whatever editor is installed (Pi's default or another extension's) and restore it on stop.
+    const liveEditorFactory: EditorFactory = (tui, editorTheme, keybindings) => {
+      const editor =
+        previousEditor?.(tui, editorTheme, keybindings) ??
+        new CustomEditor(tui, editorTheme, keybindings, { embedWorkingStatus: true });
+      for (const prompt of sessionPrompts(ctx)) editor.addToHistory?.(prompt);
+      const addToHistory = editor.addToHistory?.bind(editor);
+      if (addToHistory) {
+        editor.addToHistory = (text) => {
+          inCallPrompts.push(text);
+          addToHistory(text);
+        };
+      }
+      visualizer ??= startRun(tui);
+      liveTui = tui;
+      liveEditor = editor;
+      undecorate?.();
+      undecorate = decorateEditorWithLive(
+        editor,
+        (width) => visualizer?.renderSegment(width) ?? "",
+      );
+      return editor;
+    };
+    const restoreEditor = () => {
+      undecorate?.();
+      undecorate = undefined;
+      if (ctx.ui.getEditorComponent() !== liveEditorFactory) return;
+      ctx.ui.setEditorComponent(previousEditor);
+      const restored = liveTui && liveEditor ? findMountedEditor(liveTui, liveEditor) : undefined;
+      for (const prompt of inCallPrompts) restored?.addToHistory?.(prompt);
+    };
     try {
-      ctx.ui.setWidget(LIVE_WIDGET_KEY, createWidget);
+      ctx.ui.setEditorComponent(liveEditorFactory);
     } catch (cause) {
       removeKeys?.();
+      visualizer?.dispose();
       await (ownRun?.dispose() ?? browserAudio?.close())?.catch(() => undefined);
       if (activeRun === ownRun) activeRun = undefined;
       throw cause;
@@ -387,9 +462,10 @@ export function registerOpenAILive(
     // The call runs in the background; the command returns so Pi keeps taking input.
     // dispose() is idempotent and closes the browser server.
     void ui.then(async (result) => {
+      visualizer?.dispose();
       try {
         removeKeys?.();
-        ctx.ui.setWidget(LIVE_WIDGET_KEY, undefined);
+        restoreEditor();
       } catch {
         // Pi may already have torn down this context's UI on shutdown.
       }

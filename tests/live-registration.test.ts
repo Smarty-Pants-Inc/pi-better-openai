@@ -9,7 +9,6 @@ import { describe, expect, test, vi, type Mock } from "vitest";
 import {
   LIVE_COMMAND,
   LIVE_DELEGATION_MESSAGE_TYPE,
-  LIVE_WIDGET_KEY,
   registerOpenAILive,
 } from "../src/live/index.ts";
 import type { LiveSessionControllerOptions } from "../src/live/controller.ts";
@@ -66,17 +65,45 @@ const theme = {
 
 type FakeTui = {
   requestRender: ReturnType<typeof vi.fn>;
-  terminal: { write: ReturnType<typeof vi.fn> };
+  terminal: { write: ReturnType<typeof vi.fn>; rows: number };
   addInputListener: ReturnType<typeof vi.fn>;
+  children: Component[];
 };
 
 function makeFakeTui(): FakeTui {
   return {
     requestRender: vi.fn(),
-    terminal: { write: vi.fn() },
+    terminal: { write: vi.fn(), rows: 24 },
     addInputListener: vi.fn(() => vi.fn()),
+    children: [],
   };
 }
+
+type FakeEditor = Component & {
+  history: string[];
+  getText(): string;
+  setText(text: string): void;
+  handleInput(data: string): void;
+  addToHistory(text: string): void;
+};
+
+/** Pi's editor shape: top border, text, bottom border. */
+function makeFakeEditor(): FakeEditor {
+  const history: string[] = [];
+  return {
+    history,
+    render: (width: number) => ["─".repeat(width), "draft", "─".repeat(width)],
+    invalidate: () => undefined,
+    getText: () => "",
+    setText: () => undefined,
+    handleInput: () => undefined,
+    addToHistory: (text: string) => void history.unshift(text),
+  };
+}
+
+const editorTheme = { borderColor: (text: string) => text, selectList: {} };
+
+type FakeEditorFactory = (tui: FakeTui, theme: unknown, keybindings: unknown) => FakeEditor;
 
 type FakeArbiter = {
   id: string;
@@ -126,11 +153,14 @@ function makeFakeArbiter(): FakeArbiterControl {
   return control;
 }
 
-/** Pi's widget UI: the visualizer mounts as a widget and the editor keeps the keyboard. */
+/** Pi's editor slot: an undefined factory mounts the default editor instance again. */
 function makeFakeUi(notify = vi.fn()) {
+  const defaultEditor = makeFakeEditor();
   const state = {
     tui: makeFakeTui(),
-    component: undefined as (Component & { dispose?(): void }) | undefined,
+    defaultEditor,
+    editor: defaultEditor as FakeEditor,
+    editorFactory: undefined as FakeEditorFactory | undefined,
     editorText: "",
     keyHandler: undefined as ((data: string) => { consume?: boolean } | undefined) | undefined,
     removeKeys: vi.fn(() => {
@@ -145,17 +175,15 @@ function makeFakeUi(notify = vi.fn()) {
       state.keyHandler = handler;
       return state.removeKeys;
     }),
-    setWidget: vi.fn((_key: string, factory: unknown) => {
-      state.component?.dispose?.();
-      state.component =
-        typeof factory === "function"
-          ? (factory as (tui: FakeTui, theme: Theme) => Component & { dispose?(): void })(
-              state.tui,
-              theme,
-            )
-          : undefined;
+    theme,
+    getEditorComponent: () => state.editorFactory,
+    setEditorComponent: vi.fn((factory: FakeEditorFactory | undefined) => {
+      state.editorFactory = factory;
+      state.editor = factory ? factory(state.tui, editorTheme, {}) : state.defaultEditor;
+      state.tui.children = [state.editor];
     }),
   };
+  state.tui.children = [state.editor];
   return { state, ui };
 }
 
@@ -206,7 +234,7 @@ describe("registerOpenAILive", () => {
 
     await commandFrom(harness).handler("", ctx);
     expect(notify).toHaveBeenCalledWith("Live voice requires interactive TUI mode.", "warning");
-    expect(ui.setWidget).not.toHaveBeenCalled();
+    expect(ui.setEditorComponent).not.toHaveBeenCalled();
 
     const tuiCtx = { mode: "tui", ui } as unknown as ExtensionCommandContext;
     await commandFrom(harness).handler("", tuiCtx);
@@ -214,7 +242,7 @@ describe("registerOpenAILive", () => {
       "Live voice is disabled. Enable it in /openai-settings.",
       "warning",
     );
-    expect(ui.setWidget).not.toHaveBeenCalled();
+    expect(ui.setEditorComponent).not.toHaveBeenCalled();
   });
 
   test("activates on the floor grant and cleans up session and queue on close", async () => {
@@ -244,9 +272,11 @@ describe("registerOpenAILive", () => {
     const ctx = makeContext(ui);
 
     await commandFrom(harness).handler("", ctx);
-    // The visualizer is a widget above Pi's editor, not a custom UI that takes the keyboard.
+    // The status is drawn on Pi's editor border, not a custom UI or widget that adds rows.
     expect(ui.custom).not.toHaveBeenCalled();
-    expect(ui.setWidget).toHaveBeenCalledWith(LIVE_WIDGET_KEY, expect.any(Function));
+    expect(ui.setEditorComponent).toHaveBeenCalledWith(expect.any(Function));
+    expect(state.editor.render(60)).toHaveLength(3);
+    expect(state.editor.render(60)[0]).toContain("standby");
     expect(live.isActive()).toBe(true);
     await vi.waitFor(() => {
       requireCallbacks(arbiter);
@@ -254,8 +284,9 @@ describe("registerOpenAILive", () => {
     expect(arbiter.options?.policy).toBe("focus");
     requireCallbacks(arbiter).onActivated("focus");
     await vi.waitFor(() => expect(live.isActive()).toBe(false));
-    expect(ui.setWidget).toHaveBeenLastCalledWith(LIVE_WIDGET_KEY, undefined);
-    expect(state.component).toBeUndefined();
+    expect(ui.setEditorComponent).toHaveBeenLastCalledWith(undefined);
+    expect(state.editor).toBe(state.defaultEditor);
+    expect(state.editor.render(60)[0]).toBe("─".repeat(60));
     expect(state.removeKeys).toHaveBeenCalledOnce();
 
     expect(sessions).toHaveLength(1);
@@ -296,7 +327,7 @@ describe("registerOpenAILive", () => {
       requireCallbacks(arbiter);
     });
     expect(arbiter.options?.policy).toBe("fifo");
-    const rendered = state.component!.render(60).join("\n");
+    const rendered = state.editor.render(60)[0];
     expect(rendered).toContain("standby");
 
     requireCallbacks(arbiter).onActivated("fifo");
@@ -307,7 +338,7 @@ describe("registerOpenAILive", () => {
     await vi.waitFor(() => {
       if (sessions[0]!.stop.mock.calls.length !== 1) throw new Error("session not parked yet");
     });
-    expect(state.component!.render(60).join("\n")).toContain("standby");
+    expect(state.editor.render(60)[0]).toContain("standby");
     expect(live.isActive()).toBe(true);
 
     // A second /live ends the call.
@@ -315,6 +346,58 @@ describe("registerOpenAILive", () => {
     await vi.waitFor(() => expect(live.isActive()).toBe(false));
     expect(sessions).toHaveLength(1);
     expect(arbiter.arbiter.leave).toHaveBeenCalledOnce();
+  });
+
+  test("wraps another extension's editor and restores its factory and history on stop", async () => {
+    const harness = createRegistrationHarness();
+    const live = registerOpenAILive(
+      harness.pi,
+      () => makeResolvedConfig({ live: { ...DEFAULT_LIVE_CONFIG, enabled: true } }),
+      {
+        createSession: (options) => makeSessionStub(options, false),
+        createArbiter: makeFakeArbiter().createArbiter,
+        probeFocusReporting: vi.fn(async () => false),
+        tickMs: 60_000,
+      },
+    );
+    const { state, ui } = makeFakeUi();
+    const otherFactory = vi.fn(() => makeFakeEditor());
+    ui.setEditorComponent(otherFactory);
+    const ctx = {
+      ...makeContext(ui),
+      sessionManager: {
+        getSessionId: () => "session-7",
+        getBranch: () => [
+          { type: "message", message: { role: "user", content: "earlier prompt" } },
+          { type: "message", message: { role: "assistant", content: "reply" } },
+        ],
+      },
+    } as unknown as ExtensionCommandContext;
+
+    await commandFrom(harness).handler("", ctx);
+    const liveEditor = state.editor;
+    expect(otherFactory).toHaveBeenCalledTimes(2);
+    expect(liveEditor.history).toEqual(["earlier prompt"]);
+    expect(liveEditor.render(80)[1]).toBe("draft");
+    liveEditor.addToHistory("typed during the call");
+
+    await live.stop();
+    await vi.waitFor(() => expect(live.isActive()).toBe(false));
+    expect(ui.getEditorComponent()).toBe(otherFactory);
+    expect(state.editor).not.toBe(liveEditor);
+    expect(state.editor.render(80)[0]).toBe("─".repeat(80));
+    expect(state.editor.history).toEqual(["typed during the call"]);
+  });
+
+  test("returns in-call prompts to Pi's default editor history", async () => {
+    const { live, state } = await startTypingCall();
+    expect(state.editor).not.toBe(state.defaultEditor);
+    state.editor.addToHistory("first");
+    state.editor.addToHistory("second");
+    await live.stop();
+    await vi.waitFor(() => expect(live.isActive()).toBe(false));
+    expect(state.editor).toBe(state.defaultEditor);
+    expect(state.defaultEditor.history).toEqual(["second", "first"]);
   });
 
   test("notifies through the terminal when the floor is granted unfocused", async () => {
@@ -462,14 +545,14 @@ describe("registerOpenAILive", () => {
       await run;
 
       expect(audio.close).toHaveBeenCalledOnce();
-      expect(ui.setWidget).not.toHaveBeenCalled();
+      expect(ui.setEditorComponent).not.toHaveBeenCalled();
     });
 
     test("closes the server when the live UI cannot open", async () => {
       const audio = fakeAudio();
       const harness = registerBrowserLive(async () => audio);
       const { ui } = makeFakeUi();
-      ui.setWidget.mockImplementation(() => {
+      ui.setEditorComponent.mockImplementation(() => {
         throw new Error("UI unavailable");
       });
       const ctx = makeContext(ui);
