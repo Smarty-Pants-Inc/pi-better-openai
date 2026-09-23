@@ -479,7 +479,10 @@ export function registerOpenAILive(
       await cleanup;
       if (activeRun === run) activeRun = undefined;
       if (settling === cleanup) settling = undefined;
-      if (result.error) ctx.ui.notify(sanitizeDiagnosticError(result.error.message), "error");
+      if (result.error) {
+        const message = `${result.error.message} Run /live or press Ctrl+Shift+L to start a new call.`;
+        ctx.ui.notify(sanitizeDiagnosticError(message), "error");
+      }
     });
   }
 
