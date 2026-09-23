@@ -199,7 +199,7 @@ export const DEFAULT_IMAGE_CONFIG: Required<ImageConfig> = {
   timeoutMs: 180_000,
 };
 
-export const DEFAULT_WEBSEARCH_MODEL = "gpt-5.6-luna";
+export const DEFAULT_WEBSEARCH_MODEL = "gpt-6-luna";
 
 export const DEFAULT_WEBSEARCH_CONFIG: Required<WebsearchConfig> = {
   enabled: true,
@@ -446,7 +446,7 @@ export const WEBSEARCH_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] 
     key: "model",
     label: "Search model",
     currentValue: (cfg) => cfg.websearch.model,
-    values: ["gpt-5.6-luna"],
+    values: ["gpt-6-luna"],
     description: "Model used by the ChatGPT Codex search backend.",
     parse: stringSetting,
   },

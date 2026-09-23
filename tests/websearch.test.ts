@@ -178,7 +178,7 @@ describe("websearch helpers", () => {
       ),
     ).toEqual({
       id: "search-id",
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       reasoning: { effort: "max" },
       input: "effect typescript",
       commands: {
@@ -246,7 +246,7 @@ describe("websearch config", () => {
   test("exposes websearch defaults", () => {
     expect(_test.DEFAULT_WEBSEARCH_CONFIG).toEqual({
       enabled: true,
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       reasoningEffort: "max",
       responseLength: "short",
       maxOutputTokens: 4096,
@@ -298,7 +298,7 @@ describe("openai_websearch tool execution", () => {
     });
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     expect(body).toMatchObject({
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       reasoning: { effort: "max" },
       input: "effect typescript",
       commands: {
@@ -322,7 +322,7 @@ describe("openai_websearch tool execution", () => {
     expect(result.details).toMatchObject({
       query: "effect typescript",
       answer: "Search completed",
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       results: [
         { url: "https://effect.website/", title: "Effect", content: "Effect documentation" },
       ],

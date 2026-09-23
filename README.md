@@ -208,7 +208,7 @@ OAuth/API-key-only setups without ChatGPT login are not supported.
 
 Settings under `websearch` in the config file or the `/openai-settings` picker:
 
-- `enabled` (default `true`), `model` (default `gpt-5.6-luna`),
+- `enabled` (default `true`), `model` (default `gpt-6-luna`),
   `reasoningEffort` (default `max`), `responseLength` (default `short`),
   `maxOutputTokens` (default `4096`, clamped to 256-100000), and
   `timeoutMs` (default `25000`, clamped to 5000-120000).
