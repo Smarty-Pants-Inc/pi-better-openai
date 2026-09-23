@@ -121,6 +121,9 @@ export type LiveConfig = {
   /** `browser` serves a loopback page that owns the microphone and speaker. */
   audio?: LiveAudioMode;
   browserPort?: number;
+  /** Browser audio: preferred microphone and speaker labels, e.g. "Yealink BT51". */
+  inputDevice?: string;
+  outputDevice?: string;
 };
 
 export type PetConfig = {
@@ -217,6 +220,8 @@ export const DEFAULT_LIVE_CONFIG: Required<LiveConfig> = {
   provider: "",
   audio: "local",
   browserPort: 8795,
+  inputDevice: "",
+  outputDevice: "",
 };
 
 export const DEFAULT_PET_CONFIG: Required<PetConfig> = {
@@ -791,6 +796,10 @@ export function readConfig(path: string): ConfigFile | undefined {
     const port = parsed.live.browserPort;
     if (typeof port === "number" && Number.isInteger(port) && port >= 1024 && port <= 65_535)
       config.live.browserPort = port;
+    for (const key of ["inputDevice", "outputDevice"] as const) {
+      const device = parsed.live[key];
+      if (typeof device === "string") config.live[key] = device.trim();
+    }
   }
   if (isRecord(parsed.pets)) {
     config.pets = {};
