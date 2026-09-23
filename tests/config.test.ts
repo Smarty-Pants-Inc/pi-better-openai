@@ -54,6 +54,8 @@ describe("config helpers", () => {
       provider: "",
       audio: "local",
       browserPort: 8795,
+      inputDevice: "",
+      outputDevice: "",
     });
     expect(_test.DEFAULT_PET_CONFIG.placement).toBe("inline-right");
     expect(_test.DEFAULT_PET_CONFIG.state).toBe("idle");
@@ -306,13 +308,21 @@ describe("config helpers", () => {
     withTempDir((tempDir) => {
       const configPath = join(tempDir, "config.json");
       writeConfig(configPath, {
-        live: { provider: " cliproxyapi ", audio: "browser", browserPort: 9001 },
+        live: {
+          provider: " cliproxyapi ",
+          audio: "browser",
+          browserPort: 9001,
+          inputDevice: " Yealink BT51 ",
+          outputDevice: "Yealink",
+        },
       });
 
       expect(readConfig(configPath)?.live).toEqual({
         provider: "cliproxyapi",
         audio: "browser",
         browserPort: 9001,
+        inputDevice: "Yealink BT51",
+        outputDevice: "Yealink",
       });
     });
   });

@@ -69,7 +69,10 @@ export interface LiveRegistrationDependencies {
   probeFocusReporting?: typeof probeFocusReporting;
   attachFocusReporting?: typeof attachFocusReporting;
   notifyActivatedUnfocused?: (handle: FocusTerminalHandle, label: string) => void;
-  startBrowserAudio?: (port: number) => Promise<BrowserLiveAudio>;
+  startBrowserAudio?: (
+    port: number,
+    devices: { inputDevice: string; outputDevice: string },
+  ) => Promise<BrowserLiveAudio>;
   tickMs?: number;
 }
 
@@ -151,7 +154,8 @@ export function registerOpenAILive(
   const notifyUnfocused = dependencies.notifyActivatedUnfocused ?? notifyActivatedUnfocused;
   const startBrowserAudio =
     dependencies.startBrowserAudio ??
-    ((port: number) => startBrowserLiveAudio({ port, token: readOrCreateBrowserToken() }));
+    ((port, devices) =>
+      startBrowserLiveAudio({ port, token: readOrCreateBrowserToken(), ...devices }));
   const tickMs = dependencies.tickMs ?? LIVE_QUEUE_TICK_MS;
   let activeRun: ActiveLiveRun | undefined;
   let settling: Promise<void> | undefined;
@@ -185,7 +189,10 @@ export function registerOpenAILive(
     try {
       if (cfg.live.provider) route = resolveLiveProviderRoute(ctx, cfg.live.provider);
       if (cfg.live.audio === "browser") {
-        browserAudio = await startBrowserAudio(cfg.live.browserPort);
+        browserAudio = await startBrowserAudio(cfg.live.browserPort, {
+          inputDevice: cfg.live.inputDevice,
+          outputDevice: cfg.live.outputDevice,
+        });
       }
     } catch (cause) {
       const message = errorFrom(cause).message;

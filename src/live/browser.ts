@@ -42,6 +42,9 @@ export interface BrowserLiveAudioOptions {
   port: number;
   token: string;
   host?: string;
+  /** Default microphone and speaker labels; a choice made in the page wins. */
+  inputDevice?: string;
+  outputDevice?: string;
 }
 
 export function readOrCreateBrowserToken(
@@ -317,6 +320,11 @@ export async function startBrowserLiveAudio(
           const previous = client;
           client = ws;
           if (previous && previous !== ws) previous.close(CLOSE_REPLACED, "replaced");
+          send(ws, {
+            type: "audio.defaults",
+            inputDevice: options.inputDevice ?? "",
+            outputDevice: options.outputDevice ?? "",
+          });
           for (const peer of peers) peer.clientConnected();
           return;
         }

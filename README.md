@@ -162,6 +162,8 @@ Two optional `live` settings support a pi session on a remote host, such as over
 
 For pi on a remote host, forward the port from the machine with the microphone, for example with `LocalForward 8795 127.0.0.1:8795` in `~/.ssh/config` or `ssh -L 8795:127.0.0.1:8795 host`. Open the printed `http://localhost:8795/#…` URL (browsers allow the microphone on `localhost`), click **Enable audio** once, and keep the tab open. The tab follows `/live` sessions and stops retrying when live mode ends. Only one pi process per host can serve the page at a time.
 
+The page has **Microphone device** and **Speaker device** pickers. `live.inputDevice` and `live.outputDevice` set their defaults by device label, for example `"Yealink BT51"`. The page matches an exact label first, then a label that contains the text, and ignores the browser's `default` and `communications` aliases. A choice made in the page is saved in that browser and beats the config default. When a chosen device is missing, the page shows a warning and uses the system default. It switches to the device when it appears, also during a call. The page never changes operating system audio settings.
+
 ## Image generation
 
 Use the command for quick generation:

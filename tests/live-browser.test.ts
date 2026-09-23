@@ -41,17 +41,49 @@ function openPage(port: number, token: string, origin = `http://localhost:${port
   return { socket, opened, closed, next, send };
 }
 
+type FakeDevice = { kind: "audioinput" | "audiooutput"; deviceId: string; label: string };
+type FakeTrack = {
+  kind: string;
+  enabled: boolean;
+  readyState: string;
+  deviceId: string;
+  stop(): void;
+};
+
 // Runs the page script with the smallest fakes of the browser APIs it uses.
-function runPageScript() {
+function runPageScript(options: { devices?: FakeDevice[]; saved?: Record<string, string> } = {}) {
   const elements = new Map<string, Record<string, unknown>>();
   const element = (id: string) => {
-    if (!elements.has(id)) elements.set(id, { textContent: "", hidden: true, value: 0 });
+    if (!elements.has(id)) {
+      const created: Record<string, unknown> = { textContent: "", hidden: true, value: 0 };
+      created.replaceChildren = (...children: Array<{ value: string; textContent: string }>) => {
+        created.options = children;
+      };
+      elements.set(id, created);
+    }
     return elements.get(id)!;
   };
   const sent: Array<Record<string, unknown>> = [];
   let socket: Record<string, (event?: unknown) => void> | undefined;
   let channel: Record<string, () => void> | undefined;
-  const track = { enabled: true, stop() {} };
+  const connections: FakePeerConnection[] = [];
+  // Browsers hide device labels until microphone permission is granted.
+  let permitted = false;
+  const devices = options.devices ?? [];
+  const saved = new Map(Object.entries(options.saved ?? {}));
+  const openedMics: string[] = [];
+  const tracks: FakeTrack[] = [];
+  const replaced: string[] = [];
+  const sinks: Array<[string, string]> = [];
+  let devicechange: (() => void) | undefined;
+  const openTrack = (deviceId: string): FakeTrack => {
+    const track = { kind: "audio", enabled: true, readyState: "live", deviceId, stop() {} };
+    track.stop = () => {
+      track.readyState = "ended";
+    };
+    tracks.push(track);
+    return track;
+  };
   class FakeWebSocket {
     static OPEN = 1;
     readyState = 1;
@@ -65,7 +97,21 @@ function runPageScript() {
   class FakePeerConnection {
     iceGatheringState = "complete";
     localDescription = { sdp: "v=0 offer" };
-    addTrack() {}
+    ontrack: ((event: unknown) => void) | undefined;
+    senders: Array<{ track: FakeTrack | null; replaceTrack(track: FakeTrack): Promise<void> }> = [];
+    addTrack(track: FakeTrack) {
+      const sender = {
+        track: track as FakeTrack | null,
+        replaceTrack: async (next: FakeTrack) => {
+          sender.track = next;
+          replaced.push(next.deviceId);
+        },
+      };
+      this.senders.push(sender);
+    }
+    getSenders() {
+      return this.senders;
+    }
     createDataChannel() {
       channel = {};
       return channel;
@@ -76,34 +122,119 @@ function runPageScript() {
     async setLocalDescription() {}
     close() {}
   }
+  const sinkTarget = (name: string) => ({
+    async setSinkId(id: string) {
+      if (id && !devices.some((device) => device.deviceId === id)) throw new Error("NotFoundError");
+      sinks.push([name, id]);
+    },
+  });
+  const PeerConnection = class extends FakePeerConnection {
+    constructor() {
+      super();
+      connections.push(this);
+    }
+  };
   const script = /<script>([\s\S]*)<\/script>/.exec(BROWSER_PAGE_HTML)?.[1] ?? "";
   runInNewContext(script, {
     location: { hash: `#${TOKEN}`, protocol: "http:", host: "localhost:1" },
-    window: { isSecureContext: true },
-    navigator: {
-      mediaDevices: {
-        getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }),
+    window: {
+      isSecureContext: true,
+      localStorage: {
+        getItem: (key: string) => saved.get(key) ?? null,
+        setItem: (key: string, value: string) => saved.set(key, value),
       },
     },
-    document: { getElementById: element },
-    Audio: class {},
+    navigator: {
+      mediaDevices: {
+        getUserMedia: async (constraints: { audio: { deviceId?: { exact: string } } | true }) => {
+          permitted = true;
+          const exact = constraints.audio === true ? undefined : constraints.audio.deviceId?.exact;
+          if (exact && !devices.some((device) => device.deviceId === exact)) {
+            throw new Error("OverconstrainedError");
+          }
+          openedMics.push(exact ?? "default");
+          const track = openTrack(exact ?? "default");
+          return { getTracks: () => [track], getAudioTracks: () => [track] };
+        },
+        enumerateDevices: async () =>
+          devices.map((device) => ({ ...device, label: permitted ? device.label : "" })),
+        addEventListener: (type: string, listener: () => void) => {
+          if (type === "devicechange") devicechange = listener;
+        },
+      },
+    },
+    document: {
+      getElementById: element,
+      createElement: () => ({ value: "", textContent: "" }),
+    },
+    Audio: class {
+      setSinkId = sinkTarget("audio").setSinkId;
+      play = async () => undefined;
+    },
     AudioContext: class {
+      setSinkId = sinkTarget("context").setSinkId;
       async resume() {}
+      createAnalyser() {
+        return { getFloatTimeDomainData() {} };
+      }
+      createMediaStreamSource() {
+        return { connect() {}, disconnect() {} };
+      }
     },
     WebSocket: FakeWebSocket,
-    RTCPeerConnection: FakePeerConnection,
+    RTCPeerConnection: PeerConnection,
     setTimeout,
+    setInterval: () => 0,
+    clearInterval: () => undefined,
   });
   return {
     status: () => element("status").textContent,
+    warning: () => String(element("device-warning").textContent),
+    select: (kind: "input" | "output") => element(`${kind}-device`),
+    choose: (kind: "input" | "output", value: string) => {
+      element(`${kind}-device`).value = value;
+      (element(`${kind}-device`).onchange as () => void)();
+    },
     enable: () => (element("enable").onclick as () => Promise<void>)(),
     openSocket: () => socket?.onopen?.(),
     receive: (message: Record<string, unknown>) =>
       socket?.onmessage?.({ data: JSON.stringify(message) }),
     openChannel: () => channel?.onopen?.(),
+    remoteTrack: () => connections.at(-1)?.ontrack?.({ streams: [{}] }),
+    deviceChange: () => devicechange?.(),
+    devices,
+    saved,
+    openedMics,
+    replaced,
+    sinks,
     sent,
   };
 }
+
+/** Starts a page call up to the sent offer. */
+async function startPageCall(page: ReturnType<typeof runPageScript>) {
+  page.receive({ type: "offer.request" });
+  await vi.waitFor(() => expect(page.sent.some((message) => message.type === "offer")).toBe(true));
+}
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+const YEALINK_MIC: FakeDevice = {
+  kind: "audioinput",
+  deviceId: "mic-y",
+  label: "Yealink BT51 Microphone",
+};
+const YEALINK_SPEAKER: FakeDevice = {
+  kind: "audiooutput",
+  deviceId: "spk-y",
+  label: "Yealink BT51",
+};
+const BUILT_IN: FakeDevice[] = [
+  { kind: "audioinput", deviceId: "default", label: "Default - Yealink BT51 Microphone" },
+  { kind: "audioinput", deviceId: "mic-mac", label: "MacBook Pro Microphone" },
+  { kind: "audiooutput", deviceId: "default", label: "Default - MacBook Pro Speakers" },
+  { kind: "audiooutput", deviceId: "spk-mac", label: "MacBook Pro Speakers" },
+];
 
 describe("browser live audio", () => {
   test("accepts only same-origin loopback hosts", () => {
@@ -129,7 +260,12 @@ describe("browser live audio", () => {
   });
 
   test("relays signaling, events, and levels between the page and the live transport", async () => {
-    const bound = await startBrowserLiveAudio({ port: 0, token: TOKEN });
+    const bound = await startBrowserLiveAudio({
+      port: 0,
+      token: TOKEN,
+      inputDevice: "Yealink BT51",
+      outputDevice: "Yealink",
+    });
     const port = Number(new URL(bound.url).port);
     try {
       expect(bound.url).toBe(`http://localhost:${port}/#${TOKEN}`);
@@ -138,6 +274,12 @@ describe("browser live audio", () => {
 
       const page = openPage(port, TOKEN);
       await page.opened;
+      // The config device defaults reach the page after its authenticated hello.
+      expect(await page.next("audio.defaults")).toEqual({
+        type: "audio.defaults",
+        inputDevice: "Yealink BT51",
+        outputDevice: "Yealink",
+      });
       const events: string[] = [];
       const levels: number[] = [];
       const inputLevels: number[] = [];
@@ -203,6 +345,73 @@ describe("browser live audio", () => {
     } finally {
       await bound.close();
     }
+  });
+
+  test("matches devices by label and applies them to the microphone and every playback target", async () => {
+    const page = runPageScript({ devices: [...BUILT_IN, YEALINK_MIC, YEALINK_SPEAKER] });
+    page.openSocket();
+    page.receive({ type: "audio.defaults", inputDevice: "yealink", outputDevice: "Yealink BT51" });
+    await page.enable();
+    await startPageCall(page);
+    page.remoteTrack();
+    await flush();
+
+    // Substring match for the mic, exact match for the speaker; the "default" alias is skipped.
+    expect(page.openedMics.at(-1)).toBe("mic-y");
+    expect(page.sinks).toContainEqual(["audio", "spk-y"]);
+    expect(page.sinks).toContainEqual(["context", "spk-y"]);
+    expect(page.warning()).toBe("");
+    expect(page.select("input").value).toBe("yealink");
+  });
+
+  test("warns and falls back to the system default only once labels are known", async () => {
+    const page = runPageScript({ devices: BUILT_IN });
+    page.openSocket();
+    page.receive({ type: "audio.defaults", inputDevice: "Yealink BT51", outputDevice: "Yealink" });
+    await flush();
+    // Before permission the labels are hidden, so the device cannot be judged missing.
+    expect(page.warning()).toBe("");
+
+    await page.enable();
+    expect(page.warning()).toContain('Microphone "Yealink BT51" is not available');
+    expect(page.warning()).toContain('Speaker "Yealink" is not available');
+    await startPageCall(page);
+    expect(page.openedMics.at(-1)).toBe("default");
+    expect(page.sinks.at(-1)).toEqual(["context", ""]);
+  });
+
+  test("a page choice is remembered and beats the config default", async () => {
+    const page = runPageScript({
+      devices: [...BUILT_IN, YEALINK_MIC, YEALINK_SPEAKER],
+      saved: { "pi-live-audio-input": "MacBook Pro Microphone" },
+    });
+    page.openSocket();
+    page.receive({ type: "audio.defaults", inputDevice: "Yealink", outputDevice: "Yealink" });
+    await page.enable();
+    page.choose("output", "MacBook Pro Speakers");
+    await startPageCall(page);
+    await flush();
+
+    expect(page.openedMics.at(-1)).toBe("mic-mac");
+    expect(page.sinks.at(-1)).toEqual(["context", "spk-mac"]);
+    expect(page.saved.get("pi-live-audio-output")).toBe("MacBook Pro Speakers");
+  });
+
+  test("switches to the chosen devices when they appear mid-call", async () => {
+    const page = runPageScript({ devices: [...BUILT_IN] });
+    page.openSocket();
+    page.receive({ type: "audio.defaults", inputDevice: "Yealink", outputDevice: "Yealink" });
+    await page.enable();
+    await startPageCall(page);
+    expect(page.openedMics).toEqual(["default", "default"]);
+    expect(page.warning()).toContain("is not available");
+
+    page.devices.push(YEALINK_MIC, YEALINK_SPEAKER);
+    page.deviceChange();
+    await vi.waitFor(() => expect(page.replaced).toEqual(["mic-y"]));
+    await flush();
+    expect(page.sinks).toContainEqual(["audio", "spk-y"]);
+    expect(page.warning()).toBe("");
   });
 
   test("page status follows mute and the call state", async () => {
