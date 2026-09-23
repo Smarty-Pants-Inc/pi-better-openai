@@ -108,9 +108,17 @@ export type WebsearchConfig = {
   timeoutMs?: number;
 };
 
+export const LIVE_AUDIO_MODES = ["local", "browser"] as const;
+export type LiveAudioMode = (typeof LIVE_AUDIO_MODES)[number];
+
 export type LiveConfig = {
   enabled?: boolean;
   voice?: LiveVoice;
+  /** pi provider whose base URL and API key route live traffic, e.g. a CLIProxyAPI gateway. */
+  provider?: string;
+  /** `browser` serves a loopback page that owns the microphone and speaker. */
+  audio?: LiveAudioMode;
+  browserPort?: number;
 };
 
 export type PetConfig = {
@@ -203,6 +211,9 @@ export const DEFAULT_WEBSEARCH_CONFIG: Required<WebsearchConfig> = {
 export const DEFAULT_LIVE_CONFIG: Required<LiveConfig> = {
   enabled: true,
   voice: DEFAULT_LIVE_VOICE,
+  provider: "",
+  audio: "local",
+  browserPort: 8795,
 };
 
 export const DEFAULT_PET_CONFIG: Required<PetConfig> = {
@@ -499,6 +510,16 @@ export const LIVE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     description: "Voice used for realtime spoken responses.",
     parse: stringSetting,
   },
+  {
+    id: "live.audio",
+    section: "live",
+    key: "audio",
+    label: "Live audio",
+    currentValue: (cfg) => cfg.live.audio,
+    values: LIVE_AUDIO_MODES,
+    description: "Use this machine's audio devices, or a browser page for remote sessions.",
+    parse: stringSetting,
+  },
 ];
 
 export const PET_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
@@ -758,6 +779,13 @@ export function readConfig(path: string): ConfigFile | undefined {
     config.live = {};
     if (typeof parsed.live.enabled === "boolean") config.live.enabled = parsed.live.enabled;
     if (isLiveVoice(parsed.live.voice)) config.live.voice = parsed.live.voice;
+    if (typeof parsed.live.provider === "string")
+      config.live.provider = parsed.live.provider.trim();
+    if ((LIVE_AUDIO_MODES as readonly unknown[]).includes(parsed.live.audio))
+      config.live.audio = parsed.live.audio as LiveAudioMode;
+    const port = parsed.live.browserPort;
+    if (typeof port === "number" && Number.isInteger(port) && port >= 1024 && port <= 65_535)
+      config.live.browserPort = port;
   }
   if (isRecord(parsed.pets)) {
     config.pets = {};

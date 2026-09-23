@@ -146,6 +146,21 @@ Live mode requires interactive TUI mode, microphone/speaker access, `openai-code
 
 The feature uses Codex Desktop's experimental `gpt-live-1-codex`/Quicksilver protocol rather than the public OpenAI Realtime API. Upstream protocol or entitlement changes may temporarily break it.
 
+### Gateway and remote audio
+
+Two optional `live` settings support a pi session on a remote host, such as over SSH:
+
+```json
+{
+  "live": { "provider": "cliproxyapi", "audio": "browser", "browserPort": 8795 }
+}
+```
+
+- `provider` names a pi provider for a [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) gateway. Live signaling (`POST /v1/live`) and the sideband (`/v1/live/{call}`) then use that provider's base URL and API key. The gateway owns ChatGPT OAuth and account selection; pi needs no `openai-codex` login.
+- `audio: "browser"` makes a browser tab the WebRTC media peer. It owns the microphone, speaker, and echo cancellation, so the pi host needs no audio devices or native audio packages. pi keeps signaling, the sideband, and delegation. `/live` serves a page on `127.0.0.1:<browserPort>` and prints its URL with a private token (stored in `~/.pi/agent/pi-better-openai/live-browser-token`). The page only accepts loopback hosts, same-origin WebSockets, and that token.
+
+For pi on a remote host, forward the port from the machine with the microphone, for example with `LocalForward 8795 127.0.0.1:8795` in `~/.ssh/config` or `ssh -L 8795:127.0.0.1:8795 host`. Open the printed `http://localhost:8795/#…` URL (browsers allow the microphone on `localhost`), click **Enable audio** once, and keep the tab open. The tab follows `/live` sessions and stops retrying when live mode ends. Only one pi process per host can serve the page at a time.
+
 ## Image generation
 
 Use the command for quick generation:

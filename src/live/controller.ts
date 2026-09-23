@@ -59,6 +59,7 @@ export interface LiveTransport {
 export interface LiveSessionControllerOptions {
   sessionId: string;
   getCredentials(signal?: AbortSignal): Promise<CodexCredentials | undefined>;
+  baseUrl?: string;
   delegate(request: string): void;
   callbacks: LiveSessionCallbacks;
   voice?: string;
@@ -183,6 +184,7 @@ export class LiveSessionController {
       this.#native = native;
       const transport = this.#createTransport({
         getCredentials: this.#options.getCredentials,
+        ...(this.#options.baseUrl ? { baseUrl: this.#options.baseUrl } : {}),
         sessionId: this.#options.sessionId,
         instructions: LIVE_INSTRUCTIONS,
         voice: this.#voice,
