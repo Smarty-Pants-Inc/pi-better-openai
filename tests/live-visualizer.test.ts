@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { LiveVisualizer } from "../src/live/visualizer.ts";
+import { LiveVisualizer, liveKeyAction } from "../src/live/visualizer.ts";
 
 const theme = {
   fg: (_color: string, text: string) => text,
@@ -13,12 +13,7 @@ afterEach(() => {
 
 describe("LiveVisualizer", () => {
   test("renders a fixed five-row panel at every supplied width", () => {
-    const visualizer = new LiveVisualizer({
-      theme,
-      requestRender: vi.fn(),
-      onStop: vi.fn(),
-      onToggleMute: vi.fn(),
-    });
+    const visualizer = new LiveVisualizer({ theme, requestRender: vi.fn() });
     try {
       for (const width of [0, 1, 2, 40, 80, 140, 200]) {
         const lines = visualizer.render(width);
@@ -30,15 +25,8 @@ describe("LiveVisualizer", () => {
     }
   });
 
-  test("sanitizes transcript control sequences and handles mute/end keys", () => {
-    const onStop = vi.fn();
-    const onToggleMute = vi.fn();
-    const visualizer = new LiveVisualizer({
-      theme,
-      requestRender: vi.fn(),
-      onStop,
-      onToggleMute,
-    });
+  test("sanitizes transcript control sequences", () => {
+    const visualizer = new LiveVisualizer({ theme, requestRender: vi.fn() });
     try {
       visualizer.setTranscript({
         role: "assistant",
@@ -49,26 +37,27 @@ describe("LiveVisualizer", () => {
       const rendered = visualizer.render(50).join("\n");
       expect(rendered).toContain("live › hello there");
       expect(rendered).not.toContain("\u001b[31m");
-
-      visualizer.handleInput(" ");
-      visualizer.handleInput("\u001b");
-      visualizer.handleInput("\u001b[108;6u");
-      expect(onToggleMute).toHaveBeenCalledOnce();
-      expect(onStop).toHaveBeenCalledTimes(2);
     } finally {
       visualizer.dispose();
     }
   });
 
+  test("Space mutes and Esc ends the call only while the editor is empty", () => {
+    expect(liveKeyAction(" ", true)).toBe("mute");
+    expect(liveKeyAction("\u001b", true)).toBe("stop");
+    expect(liveKeyAction(" ", false)).toBeUndefined();
+    expect(liveKeyAction("\u001b", false)).toBeUndefined();
+    expect(liveKeyAction("a", true)).toBeUndefined();
+    expect(liveKeyAction("\r", true)).toBeUndefined();
+    // Ctrl+C and Ctrl+Shift+L stay with Pi; the registered shortcut toggles the call.
+    expect(liveKeyAction("\u0003", true)).toBeUndefined();
+    expect(liveKeyAction("\u001b[108;6u", true)).toBeUndefined();
+  });
+
   test("animates through requestRender and stops its timer on dispose", () => {
     vi.useFakeTimers();
     const requestRender = vi.fn();
-    const visualizer = new LiveVisualizer({
-      theme,
-      requestRender,
-      onStop: vi.fn(),
-      onToggleMute: vi.fn(),
-    });
+    const visualizer = new LiveVisualizer({ theme, requestRender });
     const initialConnectingFrame = visualizer.render(80);
     requestRender.mockClear();
     vi.advanceTimersByTime(80);

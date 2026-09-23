@@ -356,6 +356,26 @@ describe("LiveSessionController", () => {
     await controller.stop();
   });
 
+  test("injects typed user text into the live context once, as silent [USER] context", async () => {
+    const { controller, send } = await startFakeSession();
+    controller.sendUserText("  What changed in the fleet?\n");
+    controller.sendUserText("   ");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(send.mock.calls.map(([message]) => message)).toEqual([
+      {
+        type: "session.context.append",
+        content: [{ type: "input_text", text: "[USER] What changed in the fleet?" }],
+      },
+    ]);
+    await controller.stop();
+    controller.sendUserText("Too late.");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(
+      send.mock.calls.filter(([message]) => message.type === "session.context.append"),
+    ).toHaveLength(1);
+  });
+
   test("keeps non-delegated tool-use and aborted replies silent", async () => {
     const { controller, reply, send } = await startFakeSession();
     reply("Checking the fleet.", "toolUse");

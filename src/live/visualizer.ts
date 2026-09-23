@@ -16,8 +16,17 @@ const ANSI_ESCAPE_REGEXP = new RegExp(String.raw`\u001B\[[0-?]*[ -/]*[@-~]`, "g"
 export interface LiveVisualizerOptions {
   theme: Theme;
   requestRender(): void;
-  onStop(): void;
-  onToggleMute(): void;
+}
+
+/**
+ * The visualizer is a widget, so Pi's editor keeps the keyboard. Space and Esc control the call
+ * only while the editor is empty; otherwise they reach the editor as usual.
+ */
+export function liveKeyAction(data: string, editorEmpty: boolean): "mute" | "stop" | undefined {
+  if (!editorEmpty) return undefined;
+  if (matchesKey(data, Key.space)) return "mute";
+  if (matchesKey(data, Key.escape)) return "stop";
+  return undefined;
 }
 
 type RenderCache = {
@@ -49,7 +58,6 @@ function truncateFromStart(text: string, width: number): string {
 }
 
 export class LiveVisualizer implements Component {
-  readonly wantsKeyRelease = false;
   readonly #options: LiveVisualizerOptions;
   #phase: LivePhase = "connecting";
   #inputLevel = 0;
@@ -92,18 +100,6 @@ export class LiveVisualizer implements Component {
     this.#transcriptRole = role;
     this.#transcriptText = text;
     this.#changed();
-  }
-
-  handleInput(data: string): void {
-    if (
-      matchesKey(data, Key.escape) ||
-      matchesKey(data, Key.ctrl("c")) ||
-      matchesKey(data, LIVE_TOGGLE_KEY)
-    ) {
-      this.#options.onStop();
-    } else if (matchesKey(data, Key.space)) {
-      this.#options.onToggleMute();
-    }
   }
 
   invalidate(): void {

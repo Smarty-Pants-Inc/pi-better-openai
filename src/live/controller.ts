@@ -22,7 +22,7 @@ The user is speaking to you. Respond directly, briefly, conversationally, and in
 
 You and the client coding agent are one assistant, not separate agents. The client has the active repository context, coding model, and tools. You must promptly create a client delegation for coding, repository investigation, tool use, commands, or verification. Include the complete request and relevant conversational context. Keep conversation natural while work runs.
 
-Treat delegation context as your own internal progress and result. Never mention a backend, delegation, protocol, or another assistant. Commentary context is silent progress and must not be recited. Context beginning with "Agent Final Message": is the final visible answer from your execution surface; present its useful result naturally as your own. Other speakable context is a reply your execution surface gave to typed text or another agent; briefly tell the user what it says, without being asked.
+Treat delegation context as your own internal progress and result. Never mention a backend, delegation, protocol, or another assistant. Commentary context is silent progress and must not be recited. Context beginning with "Agent Final Message": is the final visible answer from your execution surface; present its useful result naturally as your own. Other speakable context is a reply your execution surface gave to typed text or another agent; briefly tell the user what it says, without being asked. Context beginning with "[USER] " is text the user typed to your execution surface, which is already handling it; use it as context and do not delegate it again.
 
 For greetings, clarification, or ordinary conversation that needs no tools, answer directly without delegating. Preserve one-assistant continuity: converse here, delegate execution, then communicate the returned result as your own.`;
 
@@ -91,6 +91,8 @@ const COVERED_FINAL_TEXT =
   "This request was answered together with the previous one. Use that answer.";
 const DROPPED_FINAL_TEXT =
   "This request was cancelled before the coding agent received it. Ask the user to repeat it if it still matters.";
+/** Codex `REALTIME_USER_TEXT_PREFIX`, which marks user text sent into the realtime context. */
+export const LIVE_USER_TEXT_PREFIX = "[USER] ";
 const MAX_DELEGATION_FIELD_LENGTH = 4 * 1024;
 const TRUNCATION_MARKER = "…";
 
@@ -296,6 +298,20 @@ export class LiveSessionController {
       this.#transport?.setMuted(this.#muted);
     } catch (cause) {
       this.#reportFailure(errorFrom(cause));
+    }
+  }
+
+  /**
+   * Tells voice about text the user typed into Pi. Pi answers it, and that final reaches voice as
+   * standalone speakable context. Like Codex `text_in`, the text is prefixed with "[USER] ".
+   * ponytail: Codex adds the prefix only on V2 and sends a channel-less context append on this
+   * frameless wire; we keep the prefix so voice can tell typed text from other silent context.
+   */
+  sendUserText(text: string): void {
+    const trimmed = text.trim();
+    if (this.#stopped || !trimmed) return;
+    for (const chunk of chunkLiveContext(`${LIVE_USER_TEXT_PREFIX}${trimmed}`)) {
+      this.#queueSend(buildSessionContextAppend(chunk));
     }
   }
 
