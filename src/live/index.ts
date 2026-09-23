@@ -1,5 +1,9 @@
-import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import {
+  type ExtensionAPI,
+  type ExtensionContext,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
+import { Text, type TUI } from "@earendil-works/pi-tui";
 import { type CodexCredentials, getCodexCredentials } from "../codex-auth.ts";
 import type { ResolvedConfig } from "../config.ts";
 import { sanitizeDiagnosticError } from "../format.ts";
@@ -23,9 +27,10 @@ import {
   startBrowserLiveAudio,
 } from "./browser.ts";
 import { liveGatewayRoot } from "./transport.ts";
-import { LiveVisualizer, LIVE_VISUALIZER_TOGGLE_KEY } from "./visualizer.ts";
+import { LiveVisualizer, LIVE_VISUALIZER_TOGGLE_KEY, liveKeyAction } from "./visualizer.ts";
 
 export const LIVE_COMMAND = "live";
+export const LIVE_WIDGET_KEY = "better-openai-live";
 export const LIVE_DELEGATION_MESSAGE_TYPE = "better-openai-live-delegation";
 export const LIVE_FOCUS_SETTLE_MS = 400;
 
@@ -33,6 +38,7 @@ interface LiveSessionRuntime {
   start(): Promise<void>;
   stop(): Promise<void>;
   toggleMute(): void;
+  sendUserText(text: string): void;
   handleAgentMessage(message: unknown): void;
   handleAgentSettled(): void;
 }
@@ -199,7 +205,11 @@ export function registerOpenAILive(
     }
 
     let ownRun = undefined as ActiveLiveRun | undefined;
-    const ui = ctx.ui.custom<LiveUiResult>((tui, theme, _keybindings, done) => {
+    let done: (result: LiveUiResult) => void = () => undefined;
+    const ui = new Promise<LiveUiResult>((resolve) => (done = resolve));
+    let removeKeys: (() => void) | undefined;
+    // A widget, not ctx.ui.custom, so Pi's editor stays usable during the call.
+    const createWidget = (tui: TUI, theme: Theme): LiveVisualizer => {
       let completed = false;
       let disposed = false;
       let session: LiveSessionRuntime | undefined;
@@ -218,10 +228,14 @@ export function registerOpenAILive(
       const visualizer = new LiveVisualizer({
         theme,
         requestRender: () => tui.requestRender(),
-        onStop: () => finishUi({}),
-        onToggleMute: () => session?.toggleMute(),
       });
       visualizer.setPhase("standby");
+      removeKeys = ctx.ui.onTerminalInput((data) => {
+        const action = liveKeyAction(data, ctx.ui.getEditorText() === "");
+        if (action === "mute") session?.toggleMute();
+        else if (action === "stop") finishUi({});
+        return action ? { consume: true } : undefined;
+      });
 
       const terminalHandle: FocusTerminalHandle = {
         write: (data) => tui.terminal.write(data),
@@ -352,12 +366,26 @@ export function registerOpenAILive(
           }
         })();
       });
-
       return visualizer;
-    });
+    };
+    try {
+      ctx.ui.setWidget(LIVE_WIDGET_KEY, createWidget);
+    } catch (cause) {
+      removeKeys?.();
+      await (ownRun?.dispose() ?? browserAudio?.close())?.catch(() => undefined);
+      if (activeRun === ownRun) activeRun = undefined;
+      throw cause;
+    }
 
-    // Runs even if the UI rejects. dispose() is idempotent and closes the browser server.
-    const result = await ui.finally(async () => {
+    // The call runs in the background; the command returns so Pi keeps taking input.
+    // dispose() is idempotent and closes the browser server.
+    void ui.then(async (result) => {
+      try {
+        removeKeys?.();
+        ctx.ui.setWidget(LIVE_WIDGET_KEY, undefined);
+      } catch {
+        // Pi may already have torn down this context's UI on shutdown.
+      }
       const run = ownRun;
       if (!run) {
         await browserAudio?.close().catch(() => undefined);
@@ -368,8 +396,8 @@ export function registerOpenAILive(
       await cleanup;
       if (activeRun === run) activeRun = undefined;
       if (settling === cleanup) settling = undefined;
+      if (result.error) ctx.ui.notify(sanitizeDiagnosticError(result.error.message), "error");
     });
-    if (result.error) ctx.ui.notify(sanitizeDiagnosticError(result.error.message), "error");
   }
 
   async function toggle(ctx: ExtensionContext): Promise<void> {
@@ -400,6 +428,12 @@ export function registerOpenAILive(
   pi.registerShortcut(LIVE_VISUALIZER_TOGGLE_KEY, {
     description: "Start or stop Better OpenAI live voice mode",
     handler: toggle,
+  });
+
+  // Typed text goes to Pi as a normal user message and, during a call, into the voice context.
+  pi.on("input", (event) => {
+    if (event.source === "interactive") activeRun?.getSession()?.sendUserText(event.text);
+    return { action: "continue" };
   });
 
   pi.on("message_end", (event) => {
