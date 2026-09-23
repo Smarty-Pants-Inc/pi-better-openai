@@ -80,8 +80,21 @@ async function startFakeSession() {
           : [],
       );
   };
-  return { controller, emit, delegation, delegate, consume, reply, finals };
+  /** Standalone context appends that are not tied to a delegation. */
+  const standalone = async () => {
+    await new Promise((resolve) => setImmediate(resolve));
+    return send.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.type === "session.context.append");
+  };
+  return { controller, emit, delegation, delegate, consume, reply, finals, standalone, send };
 }
+
+const speakable = (text: string) => ({
+  type: "session.context.append",
+  channel: "speakable",
+  content: [{ type: "input_text", text }],
+});
 
 describe("LiveSessionController", () => {
   test("delegates coding work and returns commentary plus the final agent result", async () => {
@@ -276,13 +289,13 @@ describe("LiveSessionController", () => {
   });
 
   test("answers every delegation made while Pi is busy, in order", async () => {
-    const { controller, delegation, consume, reply, finals } = await startFakeSession();
+    const { controller, delegation, consume, reply, finals, standalone } = await startFakeSession();
     delegation("d-1", "First question?");
     delegation("d-2", "Second question?");
     delegation("d-3", "Third question?");
     expect(controller.activeDelegationId).toBe("d-1");
 
-    // Pi first finishes unrelated work from another steer; voice must not speak it.
+    // Pi first finishes unrelated work from another steer; it must not answer a delegation.
     reply("Answer to a Fabric steer.");
     consume(0);
     reply("Answer one.");
@@ -297,12 +310,13 @@ describe("LiveSessionController", () => {
       ["d-2", '"Agent Final Message":\n\nAnswer two.'],
       ["d-3", '"Agent Final Message":\n\nAnswer three.'],
     ]);
+    expect(await standalone()).toEqual([speakable("Answer to a Fabric steer.")]);
     expect(controller.activeDelegationId).toBeUndefined();
     await controller.stop();
   });
 
   test("sends the final on message_end without waiting for agent_settled", async () => {
-    const { controller, delegation, consume, reply, finals } = await startFakeSession();
+    const { controller, delegation, consume, reply, finals, standalone } = await startFakeSession();
     delegation("d-1", "What changed?");
     consume(0);
     reply("Looking.", "toolUse");
@@ -314,6 +328,44 @@ describe("LiveSessionController", () => {
     reply("Answer to a later Fabric steer.");
     controller.handleAgentSettled();
     expect(await finals()).toHaveLength(1);
+    expect(await standalone()).toEqual([speakable("Answer to a later Fabric steer.")]);
+    await controller.stop();
+  });
+
+  test("sends a non-delegated final to voice once as standalone speakable context", async () => {
+    const { controller, reply, standalone, send } = await startFakeSession();
+    // An idle call: Pi answers a Fabric steer or typed input that no delegation started.
+    reply("The org lead approved the fleet rollout.");
+    controller.handleAgentSettled();
+
+    expect(await standalone()).toEqual([speakable("The org lead approved the fleet rollout.")]);
+    expect(send.mock.calls.map(([message]) => message.type)).toEqual(["session.context.append"]);
+    expect(controller.phase).toBe("listening");
+    await controller.stop();
+  });
+
+  test("speaks a delegated final only through its delegation", async () => {
+    const { controller, delegation, consume, reply, finals, standalone } = await startFakeSession();
+    delegation("d-1", "Run the tests.");
+    consume(0);
+    reply("All tests pass.");
+    controller.handleAgentSettled();
+
+    expect(await finals()).toEqual([["d-1", '"Agent Final Message":\n\nAll tests pass.']]);
+    expect(await standalone()).toEqual([]);
+    await controller.stop();
+  });
+
+  test("keeps non-delegated tool-use and aborted replies silent", async () => {
+    const { controller, reply, send } = await startFakeSession();
+    reply("Checking the fleet.", "toolUse");
+    reply("", "toolUse");
+    reply("Partial answ", "aborted");
+    reply("");
+    controller.handleAgentSettled();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(send).not.toHaveBeenCalled();
     await controller.stop();
   });
 
