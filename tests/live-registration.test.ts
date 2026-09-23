@@ -5,17 +5,22 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test, vi, type Mock } from "vitest";
 import {
   LIVE_COMMAND,
+  LIVE_FOCUS_SETTLE_MS,
   LIVE_DELEGATION_MESSAGE_TYPE,
   registerOpenAILive,
 } from "../src/live/index.ts";
 import type { LiveSessionControllerOptions } from "../src/live/controller.ts";
-import type {
-  LiveFloorArbiterCallbacks,
-  LiveFloorArbiterLike,
-  LiveFloorArbiterOptions,
+import {
+  LiveFloorArbiter,
+  type LiveFloorArbiterCallbacks,
+  type LiveFloorArbiterLike,
+  type LiveFloorArbiterOptions,
 } from "../src/live/queue.ts";
 import { DEFAULT_LIVE_CONFIG } from "../src/config.ts";
 import type { BrowserLiveAudio } from "../src/live/browser.ts";
@@ -398,6 +403,56 @@ describe("registerOpenAILive", () => {
     await vi.waitFor(() => expect(live.isActive()).toBe(false));
     expect(state.editor).toBe(state.defaultEditor);
     expect(state.defaultEditor.history).toEqual(["second", "first"]);
+  });
+
+  test("a focus-out, terminal detach, and reattach keep the live call", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-live-focus-"));
+    const harness = createRegistrationHarness();
+    const sessions: Array<ReturnType<typeof makeSessionStub>> = [];
+    let onFocus: ((focused: boolean) => void) | undefined;
+    const live = registerOpenAILive(
+      harness.pi,
+      () => makeResolvedConfig({ live: { ...DEFAULT_LIVE_CONFIG, enabled: true } }),
+      {
+        createSession: (options) => {
+          const stub = makeSessionStub(options, false);
+          sessions.push(stub);
+          return stub;
+        },
+        // The real file-backed arbiter, so its focus rules are what is tested.
+        createArbiter: (options, callbacks) =>
+          new LiveFloorArbiter({ ...options, directory }, callbacks),
+        probeFocusReporting: vi.fn(async () => true),
+        attachFocusReporting: vi.fn((_handle, listener: (focused: boolean) => void) => {
+          onFocus = listener;
+          return vi.fn();
+        }),
+        tickMs: 10,
+      },
+    );
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const { ui } = makeFakeUi();
+    try {
+      await commandFrom(harness).handler("", makeContext(ui));
+      await vi.waitFor(() => expect(sessions[0]?.start).toHaveBeenCalledOnce());
+      onFocus!(true);
+      await sleep(LIVE_FOCUS_SETTLE_MS + 50);
+
+      // The Herdr client exits: the terminal reports focus-out, then stays silent while detached.
+      onFocus!(false);
+      await sleep(200);
+      // The client reattaches and the terminal reports focus again.
+      onFocus!(true);
+      await sleep(LIVE_FOCUS_SETTLE_MS + 100);
+
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]!.stop).not.toHaveBeenCalled();
+      expect(live.isActive()).toBe(true);
+      expect(ui.notify).not.toHaveBeenCalledWith(expect.anything(), "error");
+    } finally {
+      await live.stop();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test("notifies through the terminal when the floor is granted unfocused", async () => {

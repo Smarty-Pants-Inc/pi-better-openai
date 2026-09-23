@@ -265,9 +265,17 @@ async function handle(message) {
 function connect() {
   $("reconnect").hidden = true;
   ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
-  ws.onopen = () => { retry = 0; send({ type: "hello", token }); status(idleText()); };
+  ws.onopen = () => { retry = 0; send({ type: "hello", token, live }); status(live ? callText() : idleText()); };
   ws.onmessage = (event) => { handle(JSON.parse(event.data)).catch(fail); };
   ws.onclose = (event) => {
+    // A dropped socket (for example a Herdr or SSH tunnel restart) keeps an open call: its media
+    // runs directly to OpenAI, and pi rebinds it when this page reconnects.
+    const keepCall = live && event.code !== 4000 && event.code !== 4001 && event.code !== 4002;
+    if (keepCall) {
+      status("Call still live. Reconnecting to pi…");
+      setTimeout(connect, Math.min(10000, 1000 * 2 ** Math.min(retry++, 4)));
+      return;
+    }
     hangup();
     if (event.code === 4001) { status("pi rejected this page. Open the URL that pi printed."); return; }
     if (event.code === 4000) { status("Another tab took over pi live audio."); $("reconnect").hidden = false; return; }

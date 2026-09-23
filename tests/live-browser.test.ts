@@ -15,7 +15,12 @@ import { BROWSER_PAGE_HTML } from "../src/live/browser-page.ts";
 
 const TOKEN = "t".repeat(32);
 
-function openPage(port: number, token: string, origin = `http://localhost:${port}`) {
+function openPage(
+  port: number,
+  token: string,
+  origin = `http://localhost:${port}`,
+  hello: Record<string, unknown> = {},
+) {
   const socket = new WebSocket(`ws://localhost:${port}/ws`, { origin });
   const messages: Array<Record<string, unknown>> = [];
   const waiters: Array<() => void> = [];
@@ -32,7 +37,7 @@ function openPage(port: number, token: string, origin = `http://localhost:${port
   };
   const opened = new Promise<void>((resolve) =>
     socket.once("open", () => {
-      socket.send(JSON.stringify({ type: "hello", token }));
+      socket.send(JSON.stringify({ type: "hello", token, ...hello }));
       resolve();
     }),
   );
@@ -120,7 +125,10 @@ function runPageScript(options: { devices?: FakeDevice[]; saved?: Record<string,
       return {};
     }
     async setLocalDescription() {}
-    close() {}
+    closed = false;
+    close() {
+      this.closed = true;
+    }
   }
   const sinkTarget = (name: string) => ({
     async setSinkId(id: string) {
@@ -197,6 +205,8 @@ function runPageScript(options: { devices?: FakeDevice[]; saved?: Record<string,
     },
     enable: () => (element("enable").onclick as () => Promise<void>)(),
     openSocket: () => socket?.onopen?.(),
+    dropSocket: (code: number) => socket?.onclose?.({ code }),
+    connections,
     receive: (message: Record<string, unknown>) =>
       socket?.onmessage?.({ data: JSON.stringify(message) }),
     openChannel: () => channel?.onopen?.(),
@@ -345,6 +355,77 @@ describe("browser live audio", () => {
     } finally {
       await bound.close();
     }
+  });
+
+  test("keeps an open call when the page socket drops, and rebinds it on reconnect", async () => {
+    const bound = await startBrowserLiveAudio({ port: 0, token: TOKEN });
+    const port = Number(new URL(bound.url).port);
+    try {
+      const page = openPage(port, TOKEN);
+      await page.opened;
+      const failures: string[] = [];
+      const peer = new bound.native.LiveWebRtcPeer(
+        () => {},
+        () => {},
+        (_error, message) => failures.push(message),
+      );
+      const offer = peer.createOffer();
+      await page.next("offer.request");
+      page.send({ type: "offer", sdp: "v=0" });
+      await offer;
+      page.send({ type: "open" });
+      await peer.waitForOpen(2_000);
+
+      // A Herdr or SSH client restart drops the tunnel: the socket closes, the call stays.
+      page.socket.terminate();
+      await page.closed;
+      peer.setMuted(true);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(failures).toEqual([]);
+
+      const back = openPage(port, TOKEN, undefined, { live: true });
+      await back.opened;
+      expect((await back.next("mute")).muted).toBe(true);
+      back.send({ type: "event", payload: "{}" });
+      peer.setMuted(false);
+      expect((await back.next("mute")).muted).toBe(false);
+
+      // A page that comes back without the call cannot resume it.
+      back.socket.terminate();
+      await back.closed;
+      const fresh = openPage(port, TOKEN);
+      await fresh.opened;
+      await vi.waitFor(() => expect(failures).toEqual(["The browser audio page lost the call."]));
+    } finally {
+      await bound.close();
+    }
+  });
+
+  test("the page keeps its call through a dropped socket and reports it on reconnect", async () => {
+    const page = runPageScript();
+    page.openSocket();
+    await page.enable();
+    await startPageCall(page);
+    page.openChannel();
+    expect(page.status()).toBe("Live. Speak to pi.");
+
+    page.dropSocket(1006);
+    expect(page.connections.at(-1)?.closed).toBe(false);
+    expect(page.status()).toBe("Call still live. Reconnecting to pi…");
+    await vi.waitFor(
+      () => {
+        page.openSocket();
+        expect(page.sent.filter((message) => message.type === "hello").at(-1)).toMatchObject({
+          live: true,
+        });
+      },
+      { timeout: 3_000 },
+    );
+    expect(page.status()).toBe("Live. Speak to pi.");
+
+    // pi stopping the call still hangs up.
+    page.dropSocket(CLOSE_STOPPED);
+    expect(page.connections.at(-1)?.closed).toBe(true);
   });
 
   test("matches devices by label and applies them to the microphone and every playback target", async () => {

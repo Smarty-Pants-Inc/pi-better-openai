@@ -134,6 +134,7 @@ export async function startBrowserLiveAudio(
     #socket: WebSocket | undefined;
     #closed = false;
     #opened = false;
+    #muted = false;
     #waiter:
       | { type: "client" | "offer" | "open"; resolve(value?: string): void; reject(e: Error): void }
       | undefined;
@@ -177,12 +178,29 @@ export async function startBrowserLiveAudio(
       });
     }
 
-    clientConnected(): void {
-      if (this.#waiter?.type === "client") this.#waiter.resolve();
+    clientConnected(socket: WebSocket, pageLive: boolean): void {
+      if (this.#waiter?.type === "client") {
+        this.#waiter.resolve();
+        return;
+      }
+      if (this.#closed || !this.#opened || socket === this.#socket) return;
+      // The page is back after a dropped socket (for example a Herdr or SSH tunnel restart).
+      // Its WebRTC call kept running, so rebind it; a page without the call cannot resume.
+      if (!pageLive) {
+        this.fail("The browser audio page lost the call.");
+        return;
+      }
+      this.#socket = socket;
+      send(socket, { type: "mute", muted: this.#muted });
     }
 
     socketClosed(socket: WebSocket): void {
-      if (socket === this.#socket) this.fail("The browser audio page disconnected.");
+      if (socket !== this.#socket) return;
+      // An open call's media runs directly between the page and OpenAI, so a dropped page
+      // socket does not end it. The page reconnects; if the call itself ends, the sideband
+      // closes and the session reports that.
+      if (this.#opened) this.#socket = undefined;
+      else this.fail("The browser audio page disconnected.");
     }
 
     handle(socket: WebSocket, message: PageMessage): void {
@@ -242,6 +260,7 @@ export async function startBrowserLiveAudio(
     }
 
     setMuted(muted: boolean): void {
+      this.#muted = muted;
       send(this.#socket, { type: "mute", muted });
     }
 
@@ -306,8 +325,11 @@ export async function startBrowserLiveAudio(
       ws.on("message", (data) => {
         if (!authenticated) {
           let token: unknown;
+          let pageLive = false;
           try {
-            token = (JSON.parse(data.toString()) as { type?: unknown; token?: unknown }).token;
+            const hello = JSON.parse(data.toString()) as { token?: unknown; live?: unknown };
+            token = hello.token;
+            pageLive = hello.live === true;
           } catch {
             token = undefined;
           }
@@ -325,7 +347,7 @@ export async function startBrowserLiveAudio(
             inputDevice: options.inputDevice ?? "",
             outputDevice: options.outputDevice ?? "",
           });
-          for (const peer of peers) peer.clientConnected();
+          for (const peer of peers) peer.clientConnected(ws, pageLive);
           return;
         }
         const message = parsePageMessage(data);
