@@ -230,6 +230,51 @@ describe("LiveSessionController", () => {
     await controller.stop();
   });
 
+  test("drops a final user turn that only repeats the delegation input", async () => {
+    const { controller, emit, delegation, delegate } = await startFakeSession();
+    emit({ type: "turn.done", turn: { role: "user", transcript: "Hi." } });
+    emit({ type: "turn.done", turn: { role: "assistant", transcript: "Hello." } });
+    emit({ type: "turn.done", turn: { role: "user", transcript: "  Run the\n tests  on dev2. " } });
+    delegation("d-1", "Run the tests on dev2.");
+    expect(delegate).toHaveBeenLastCalledWith(
+      [
+        "<realtime_delegation>",
+        "  <input>Run the tests on dev2.</input>",
+        "  <transcript_delta>user: Hi.",
+        "assistant: Hello.</transcript_delta>",
+        "</realtime_delegation>",
+      ].join("\n"),
+    );
+
+    // A partial transcript that the input already holds is dropped as well; no empty delta is sent.
+    emit({ type: "input_transcript.added", item: { text: "Then deploy" } });
+    delegation("d-2", "Then deploy it.");
+    expect(delegate).toHaveBeenLastCalledWith(
+      ["<realtime_delegation>", "  <input>Then deploy it.</input>", "</realtime_delegation>"].join(
+        "\n",
+      ),
+    );
+    await controller.stop();
+  });
+
+  test("keeps a final user turn that adds to the delegation input", async () => {
+    const { controller, emit, delegation, delegate } = await startFakeSession();
+    emit({
+      type: "turn.done",
+      turn: { role: "user", transcript: "Run the tests, but only on dev2." },
+    });
+    delegation("d-1", "Run the tests.");
+    expect(delegate).toHaveBeenLastCalledWith(
+      [
+        "<realtime_delegation>",
+        "  <input>Run the tests.</input>",
+        "  <transcript_delta>user: Run the tests, but only on dev2.</transcript_delta>",
+        "</realtime_delegation>",
+      ].join("\n"),
+    );
+    await controller.stop();
+  });
+
   test("answers every delegation made while Pi is busy, in order", async () => {
     const { controller, delegation, consume, reply, finals } = await startFakeSession();
     delegation("d-1", "First question?");
