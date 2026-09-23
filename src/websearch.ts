@@ -6,8 +6,13 @@ import {
   type ResolvedConfig,
   type WebsearchResponseLength,
 } from "./config.ts";
-import { getCodexCredentials, type CodexCredentialsWithSource } from "./codex-auth.ts";
+import {
+  type CodexCredentials,
+  getCodexCredentials,
+  type CodexCredentialsWithSource,
+} from "./codex-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
+import { resolveLiveProviderRoute } from "./live/index.ts";
 
 export const OPENAI_WEBSEARCH_TOOL = "openai_websearch";
 export const OPENAI_WEBSEARCH_COMMAND = "openai-websearch";
@@ -83,16 +88,52 @@ export type WebSearchDebug = {
   lastError?: string;
 };
 
-async function getCredentials(
+type SearchRoute = {
+  url: string;
+  credentials: CodexCredentials & { source: CodexCredentialsWithSource["source"] | "provider" };
+  provider?: string;
+};
+
+/**
+ * With websearch.provider set, search goes through that pi provider (for example a
+ * CLIProxyAPI gateway) with its base URL and API key, resolved the same way /live does.
+ * The gateway owns ChatGPT OAuth and account selection. Unset keeps openai-codex OAuth.
+ */
+async function resolveSearchRoute(
   ctx: ExtensionContext,
+  cfg: ResolvedConfig,
   signal?: AbortSignal,
-): Promise<CodexCredentialsWithSource> {
-  const credentials = await getCodexCredentials(ctx, signal);
-  if (credentials) return credentials;
-  throw new WebSearchError(
-    "authentication_required",
-    "Missing openai-codex OAuth credentials. Run /login openai-codex.",
-  );
+): Promise<SearchRoute> {
+  const provider = cfg.websearch.provider;
+  if (!provider) {
+    const credentials = await getCodexCredentials(ctx, signal);
+    if (credentials) return { url: CODEX_SEARCH_URL, credentials };
+    throw new WebSearchError(
+      "authentication_required",
+      "Missing openai-codex OAuth credentials. Run /login openai-codex, or set websearch.provider.",
+    );
+  }
+  let route: ReturnType<typeof resolveLiveProviderRoute>;
+  try {
+    route = resolveLiveProviderRoute(ctx, provider);
+  } catch {
+    throw new WebSearchError(
+      "authentication_required",
+      `Web search provider "${provider}" has no model with a base URL in pi.`,
+    );
+  }
+  const credentials = await route.getCredentials();
+  if (!credentials) {
+    throw new WebSearchError(
+      "authentication_required",
+      `Web search provider "${provider}" has no API key in pi.`,
+    );
+  }
+  return {
+    url: `${route.baseUrl}/v1/alpha/search`,
+    credentials: { ...credentials, source: "provider" },
+    provider,
+  };
 }
 
 export function validateSearchQuery(query: string): string {
@@ -130,12 +171,11 @@ export function buildSearchRequestBody(
   };
 }
 
-export function buildSearchHeaders(
-  credentials: CodexCredentialsWithSource,
-): Record<string, string> {
+export function buildSearchHeaders(credentials: CodexCredentials): Record<string, string> {
   return {
     authorization: `Bearer ${credentials.accessToken}`,
-    "chatgpt-account-id": credentials.accountId,
+    // A gateway route has no account ID; the gateway selects the account.
+    ...(credentials.accountId ? { "chatgpt-account-id": credentials.accountId } : {}),
     accept: "application/json",
     "content-type": "application/json",
     originator: SEARCH_ORIGINATOR,
@@ -257,13 +297,13 @@ async function requestWebSearch(
   const timeoutSignal = AbortSignal.timeout(cfg.websearch.timeoutMs);
   const baseSignal = requestSignal ?? ctx.signal;
   const signal = baseSignal ? AbortSignal.any([baseSignal, timeoutSignal]) : timeoutSignal;
-  const credentials = await getCredentials(ctx, signal);
+  const route = await resolveSearchRoute(ctx, cfg, signal);
 
   let response: Response;
   try {
-    response = await fetch(CODEX_SEARCH_URL, {
+    response = await fetch(route.url, {
       method: "POST",
-      headers: buildSearchHeaders(credentials),
+      headers: buildSearchHeaders(route.credentials),
       body: JSON.stringify(
         buildSearchRequestBody(query, cfg.websearch, responseLength, crypto.randomUUID()),
       ),
@@ -288,7 +328,7 @@ async function requestWebSearch(
     );
   }
 
-  if (response.url && new URL(response.url).origin !== new URL(CODEX_SEARCH_URL).origin) {
+  if (response.url && new URL(response.url).origin !== new URL(route.url).origin) {
     await response.body?.cancel().catch(() => undefined);
     throw new WebSearchError(
       "request_failed",
@@ -300,7 +340,9 @@ async function requestWebSearch(
     if (response.status === 401 || response.status === 403) {
       throw new WebSearchError(
         "authentication_failed",
-        `ChatGPT web search authentication failed (HTTP ${response.status}). Reconnect with /login openai-codex.`,
+        route.provider
+          ? `Web search authentication failed at provider "${route.provider}" (HTTP ${response.status}). Check its API key in pi.`
+          : `ChatGPT web search authentication failed (HTTP ${response.status}). Reconnect with /login openai-codex.`,
       );
     }
     throw new WebSearchError(
@@ -348,17 +390,19 @@ export function registerOpenAIWebSearch(
 
   async function getDebug(ctx: ExtensionContext): Promise<WebSearchDebug> {
     const cfg = getConfig(ctx);
-    let credentials: CodexCredentialsWithSource | undefined;
+    let route: SearchRoute | undefined;
     try {
-      credentials = await getCredentials(ctx);
+      route = await resolveSearchRoute(ctx, cfg);
     } catch {
-      credentials = undefined;
+      route = undefined;
     }
     return {
-      authFound: credentials !== undefined,
-      authSource: credentials?.source,
-      accountId: maskIdentifier(credentials?.accountId),
-      endpoint: CODEX_SEARCH_URL,
+      authFound: route !== undefined,
+      authSource: route?.provider ? `provider:${route.provider}` : route?.credentials.source,
+      accountId: maskIdentifier(route?.credentials.accountId),
+      endpoint:
+        route?.url ??
+        (cfg.websearch.provider ? `provider "${cfg.websearch.provider}"` : CODEX_SEARCH_URL),
       model: cfg.websearch.model,
       reasoningEffort: cfg.websearch.reasoningEffort,
       enabled: cfg.websearch.enabled,

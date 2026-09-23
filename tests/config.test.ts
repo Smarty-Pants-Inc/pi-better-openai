@@ -292,6 +292,16 @@ describe("config helpers", () => {
     });
   });
 
+  test("reads the websearch gateway provider", () => {
+    withTempDir((tempDir) => {
+      const configPath = join(tempDir, "config.json");
+      writeConfig(configPath, { websearch: { provider: " cliproxyapi " } });
+      expect(readConfig(configPath)?.websearch).toEqual({ provider: "cliproxyapi" });
+      writeConfig(configPath, { websearch: { provider: 7 } });
+      expect(readConfig(configPath)?.websearch).toEqual({});
+    });
+  });
+
   test("reads live gateway and browser audio settings", () => {
     withTempDir((tempDir) => {
       const configPath = join(tempDir, "config.json");

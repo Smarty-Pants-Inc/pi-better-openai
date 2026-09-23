@@ -5,6 +5,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { _test } from "../index.ts";
 import { writeConfig } from "../src/config.ts";
+import { getCodexCredentials } from "../src/codex-auth.ts";
 import { registerOpenAIWebSearch, _websearchTest } from "../src/websearch.ts";
 import { makeResolvedConfig } from "./helpers.ts";
 
@@ -55,6 +56,8 @@ function createWebsearchHarness(
   options: {
     registryCredentials?: string;
     websearchConfig?: Partial<typeof _test.DEFAULT_WEBSEARCH_CONFIG>;
+    /** Gateway providers in pi's model registry, with their API keys. */
+    providers?: Record<string, { baseUrl: string; apiKey?: string }>;
   } = {},
 ): WebsearchHarness {
   const cwd = createTempProject();
@@ -73,9 +76,20 @@ function createWebsearchHarness(
     model: { provider: "openai-codex", id: "gpt-5.5" },
     ui: { notify: vi.fn() },
     modelRegistry: {
-      getApiKeyForProvider: vi.fn(() =>
+      getAll: vi.fn(() =>
+        Object.entries(options.providers ?? {}).map(([provider, { baseUrl }]) => ({
+          provider,
+          id: "gpt-5.5",
+          baseUrl,
+        })),
+      ),
+      getApiKeyForProvider: vi.fn((provider: string) =>
         Promise.resolve(
-          "registryCredentials" in options ? options.registryCredentials : REGISTRY_CREDENTIALS,
+          provider !== "openai-codex"
+            ? options.providers?.[provider]?.apiKey
+            : "registryCredentials" in options
+              ? options.registryCredentials
+              : REGISTRY_CREDENTIALS,
         ),
       ),
       isUsingOAuth: vi.fn(() => true),
@@ -237,6 +251,7 @@ describe("websearch config", () => {
       responseLength: "short",
       maxOutputTokens: 4096,
       timeoutMs: 25_000,
+      provider: "",
     });
   });
 
@@ -322,6 +337,69 @@ describe("openai_websearch tool execution", () => {
       enabled: true,
       lastStatus: "completed (1 sources)",
     });
+  });
+
+  test("routes through websearch.provider with its key and no codex OAuth", async () => {
+    const fetchMock = stubFetch(codexSearchResponse());
+    const harness = createWebsearchHarness({
+      registryCredentials: undefined,
+      websearchConfig: { provider: "cliproxyapi" },
+      providers: { cliproxyapi: { baseUrl: "https://gateway.example/v1", apiKey: "gw-key" } },
+    });
+
+    const result = await executeSearch(harness, { query: "effect typescript" });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://gateway.example/v1/alpha/search");
+    expect(init.headers).toMatchObject({
+      authorization: "Bearer gw-key",
+      originator: "codex_cli_rs",
+    });
+    expect(init.headers).not.toHaveProperty("chatgpt-account-id");
+    expect(JSON.parse(String(init.body))).toMatchObject({ input: "effect typescript" });
+    expect(getCodexCredentials).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({ answer: "Search completed" });
+    expect(await harness.getDebug(harness.ctx)).toMatchObject({
+      authFound: true,
+      authSource: "provider:cliproxyapi",
+      endpoint: "https://gateway.example/v1/alpha/search",
+      lastStatus: "completed (1 sources)",
+    });
+    expect(JSON.stringify(await harness.getDebug(harness.ctx))).not.toContain("gw-key");
+  });
+
+  test("fails cleanly for an unknown or keyless websearch.provider", async () => {
+    const fetchMock = stubFetch(codexSearchResponse());
+    const unknown = createWebsearchHarness({ websearchConfig: { provider: "missing" } });
+    expect((await rejectedError(executeSearch(unknown, { query: "q" }))).message).toBe(
+      'Web search provider "missing" has no model with a base URL in pi.',
+    );
+    expect(await unknown.getDebug(unknown.ctx)).toMatchObject({
+      authFound: false,
+      endpoint: 'provider "missing"',
+    });
+
+    const keyless = createWebsearchHarness({
+      websearchConfig: { provider: "cliproxyapi" },
+      providers: { cliproxyapi: { baseUrl: "https://gateway.example/v1" } },
+    });
+    expect((await rejectedError(executeSearch(keyless, { query: "q" }))).message).toBe(
+      'Web search provider "cliproxyapi" has no API key in pi.',
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("names the provider when the gateway rejects its key", async () => {
+    stubFetch(new Response("denied", { status: 401 }));
+    const harness = createWebsearchHarness({
+      websearchConfig: { provider: "cliproxyapi" },
+      providers: { cliproxyapi: { baseUrl: "https://gateway.example/v1", apiKey: "gw-key" } },
+    });
+    const error = await rejectedError(executeSearch(harness, { query: "q" }));
+    expect(error.message).toBe(
+      'Web search authentication failed at provider "cliproxyapi" (HTTP 401). Check its API key in pi.',
+    );
+    expect(error.message).not.toContain("gw-key");
   });
 
   test("honours the responseLength override parameter", async () => {
