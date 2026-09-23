@@ -30,6 +30,59 @@ async function flushSends(): Promise<void> {
   for (let index = 0; index < 6; index += 1) await Promise.resolve();
 }
 
+async function startFakeSession() {
+  let transportOptions: LiveTransportOptions | undefined;
+  const send = vi.fn(async (_message: LiveClientMessage) => undefined);
+  const delegate = vi.fn((_request: string) => undefined);
+  const controller = new LiveSessionController({
+    sessionId: "session-fifo",
+    native: fakeNative(),
+    getCredentials: vi.fn(async () => ({ accessToken: "token", accountId: "account" })),
+    delegate,
+    createTransport: (options) => {
+      transportOptions = options;
+      return {
+        connect: vi.fn(async () => undefined),
+        send,
+        pushAudio: vi.fn(),
+        setMuted: vi.fn(),
+        close: vi.fn(async () => undefined),
+      };
+    },
+    createAudioCapture: () => ({ stop: vi.fn() }),
+    callbacks: { onPhase: vi.fn(), onLevels: vi.fn(), onTranscript: vi.fn(), onTerminal: vi.fn() },
+  });
+  await controller.start();
+  const emit = (event: Parameters<LiveTransportOptions["callbacks"]["onEvent"]>[0]) =>
+    transportOptions?.callbacks.onEvent(event);
+  const delegation = (id: string, text: string) =>
+    emit({
+      type: "delegation.created",
+      item: { type: "delegation", target: "client", id, content: [{ type: "input_text", text }] },
+    });
+  /** Pi's message_end for the steered delegation message. */
+  const consume = (call: number) =>
+    controller.handleAgentMessage({ role: "custom", content: delegate.mock.calls[call]?.[0] });
+  const reply = (text: string, stopReason = "stop") =>
+    controller.handleAgentMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      stopReason,
+    });
+  const finals = async () => {
+    await new Promise((resolve) => setImmediate(resolve));
+    return send.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.type === "delegation.context.append" && !("channel" in message))
+      .map((message) =>
+        message.type === "delegation.context.append"
+          ? [message.delegation_item_id, message.content[0]?.text]
+          : [],
+      );
+  };
+  return { controller, emit, delegation, delegate, consume, reply, finals };
+}
+
 describe("LiveSessionController", () => {
   test("delegates coding work and returns commentary plus the final agent result", async () => {
     let transportOptions: LiveTransportOptions | undefined;
@@ -79,9 +132,12 @@ describe("LiveSessionController", () => {
         content: [{ type: "input_text", text: "Fix the failing test." }],
       },
     });
-    expect(delegate).toHaveBeenCalledWith("Fix the failing test.");
+    const request =
+      "<realtime_delegation>\n  <input>Fix the failing test.</input>\n</realtime_delegation>";
+    expect(delegate).toHaveBeenCalledWith(request);
     expect(phases).toContain("working");
 
+    controller.handleAgentMessage({ role: "custom", content: request });
     controller.handleAgentMessage({
       role: "assistant",
       content: [{ type: "text", text: "I found the failing assertion." }],
@@ -133,6 +189,87 @@ describe("LiveSessionController", () => {
     expect(send).toHaveBeenLastCalledWith({ type: "session.close" });
     expect(callOrder.slice(-2)).toEqual(["send:session.close", "close"]);
     expect(terminal).toHaveBeenCalledOnce();
+  });
+
+  test("carries undelegated transcripts from before a pause and the previous turn", async () => {
+    const { controller, emit, delegation, delegate } = await startFakeSession();
+    emit({ type: "input_transcript.added", item: { text: "Make sure the whole fleet" } });
+    emit({
+      type: "turn.done",
+      turn: { role: "user", transcript: "Make sure the whole fleet uses the new workflows." },
+    });
+    emit({ type: "turn.done", turn: { role: "assistant", transcript: "Which workflows?" } });
+    emit({ type: "input_transcript.added", item: { text: "The GitHub & Fabric ones" } });
+    delegation("d-1", "Check the fleet uses the GitHub and Fabric workflows.");
+
+    expect(delegate).toHaveBeenLastCalledWith(
+      [
+        "<realtime_delegation>",
+        "  <input>Check the fleet uses the GitHub and Fabric workflows.</input>",
+        "  <transcript_delta>user: Make sure the whole fleet uses the new workflows.",
+        "assistant: Which workflows?",
+        "user: The GitHub &amp; Fabric ones</transcript_delta>",
+        "</realtime_delegation>",
+      ].join("\n"),
+    );
+
+    // The rest of the partly delegated turn goes with the next delegation, without repeats.
+    emit({
+      type: "turn.done",
+      turn: { role: "user", transcript: "The GitHub & Fabric ones, on every host." },
+    });
+    delegation("d-2", "Include every host.");
+    expect(delegate).toHaveBeenLastCalledWith(
+      [
+        "<realtime_delegation>",
+        "  <input>Include every host.</input>",
+        "  <transcript_delta>user: , on every host.</transcript_delta>",
+        "</realtime_delegation>",
+      ].join("\n"),
+    );
+    await controller.stop();
+  });
+
+  test("answers every delegation made while Pi is busy, in order", async () => {
+    const { controller, delegation, consume, reply, finals } = await startFakeSession();
+    delegation("d-1", "First question?");
+    delegation("d-2", "Second question?");
+    delegation("d-3", "Third question?");
+    expect(controller.activeDelegationId).toBe("d-1");
+
+    // Pi first finishes unrelated work from another steer; voice must not speak it.
+    reply("Answer to a Fabric steer.");
+    consume(0);
+    reply("Answer one.");
+    consume(1);
+    reply("Answer two.");
+    consume(2);
+    reply("Answer three.");
+    controller.handleAgentSettled();
+
+    expect(await finals()).toEqual([
+      ["d-1", '"Agent Final Message":\n\nAnswer one.'],
+      ["d-2", '"Agent Final Message":\n\nAnswer two.'],
+      ["d-3", '"Agent Final Message":\n\nAnswer three.'],
+    ]);
+    expect(controller.activeDelegationId).toBeUndefined();
+    await controller.stop();
+  });
+
+  test("sends the final on message_end without waiting for agent_settled", async () => {
+    const { controller, delegation, consume, reply, finals } = await startFakeSession();
+    delegation("d-1", "What changed?");
+    consume(0);
+    reply("Looking.", "toolUse");
+    reply("Two files changed.");
+
+    // Other steers keep the run going; the answer is already out.
+    expect(await finals()).toEqual([["d-1", '"Agent Final Message":\n\nTwo files changed.']]);
+    expect(controller.phase).not.toBe("working");
+    reply("Answer to a later Fabric steer.");
+    controller.handleAgentSettled();
+    expect(await finals()).toHaveLength(1);
+    await controller.stop();
   });
 
   test("starts microphone capture before transport negotiation completes", async () => {

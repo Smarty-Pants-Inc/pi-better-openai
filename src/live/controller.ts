@@ -72,6 +72,27 @@ export interface LiveSessionControllerOptions {
   ) => LiveAudioCapture;
 }
 
+type TranscriptEntry = {
+  role: LiveTranscript["role"];
+  turn: number;
+  text: string;
+};
+
+type OpenDelegation = {
+  id: string;
+  request: string;
+  /** Pi injected the request into its context (its custom message_end fired). */
+  consumed: boolean;
+};
+
+const NO_FINAL_TEXT = "The requested coding task ended without a final response.";
+const COVERED_FINAL_TEXT =
+  "This request was answered together with the previous one. Use that answer.";
+const DROPPED_FINAL_TEXT =
+  "This request was cancelled before the coding agent received it. Ask the user to repeat it if it still matters.";
+const MAX_DELEGATION_FIELD_LENGTH = 4 * 1024;
+const TRUNCATION_MARKER = "…";
+
 type AssistantSnapshot = {
   text: string;
   stopReason: string | undefined;
@@ -99,6 +120,33 @@ export function microphoneLevel(samples: Float32Array): number {
     sumSquares += sample * sample;
   }
   return clampLevel(Math.sqrt(sumSquares / samples.length));
+}
+
+function escapeXmlText(text: string): string {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+// ponytail: bounds by UTF-16 length, not bytes as in Codex. Both keep the field near 4 KiB.
+function boundDelegationField(text: string, retain: "start" | "end"): string {
+  const escaped = escapeXmlText(text);
+  if (escaped.length <= MAX_DELEGATION_FIELD_LENGTH) return escaped;
+  const kept = MAX_DELEGATION_FIELD_LENGTH - TRUNCATION_MARKER.length;
+  return retain === "start"
+    ? `${escaped.slice(0, kept)}${TRUNCATION_MARKER}`
+    : `${TRUNCATION_MARKER}${escaped.slice(-kept)}`;
+}
+
+/** Codex `RealtimeDelegation` rendering: the handoff input plus the transcript since the last one. */
+export function renderLiveDelegation(
+  input: string,
+  transcriptDelta: readonly TranscriptEntry[],
+): string {
+  const delta = transcriptDelta.map((entry) => `${entry.role}: ${entry.text}`).join("\n");
+  const body = [`  <input>${boundDelegationField(input, "start")}</input>`];
+  if (delta) {
+    body.push(`  <transcript_delta>${boundDelegationField(delta, "end")}</transcript_delta>`);
+  }
+  return `<realtime_delegation>\n${body.join("\n")}\n</realtime_delegation>`;
 }
 
 export function extractAssistantSnapshot(message: unknown): AssistantSnapshot | undefined {
@@ -139,8 +187,9 @@ export class LiveSessionController {
   #outputLevel = 0;
   #digitalSilenceSampleCount = 0;
   #microphoneSignalDetected = false;
-  #activeDelegationId: string | undefined;
-  #pendingAgentFinal = "";
+  #openDelegations: OpenDelegation[] = [];
+  #transcriptDelta: TranscriptEntry[] = [];
+  #delegatedTurnText: Partial<Record<LiveTranscript["role"], { turn: number; text: string }>> = {};
   #userTranscript = "";
   #assistantTranscript = "";
   #userTranscriptFinal = false;
@@ -168,7 +217,7 @@ export class LiveSessionController {
   }
 
   get activeDelegationId(): string | undefined {
-    return this.#activeDelegationId;
+    return this.#openDelegations[0]?.id;
   }
 
   async start(): Promise<void> {
@@ -238,34 +287,43 @@ export class LiveSessionController {
     }
   }
 
+  /**
+   * Receives every Pi `message_end`. Delegations are answered in FIFO order, and only after Pi
+   * has consumed them, so replies to other steers in the same run are never spoken.
+   */
   handleAgentMessage(message: unknown): void {
-    if (!this.#activeDelegationId || this.#stopped) return;
+    if (this.#stopped || this.#openDelegations.length === 0) return;
+    if (isRecord(message) && message.role === "custom") {
+      this.#markConsumed(message.content);
+      return;
+    }
     const snapshot = extractAssistantSnapshot(message);
     if (!snapshot) return;
+    const consumed = this.#openDelegations.filter((delegation) => delegation.consumed);
+    const [oldest, ...covered] = consumed;
+    if (!oldest) return;
     if (snapshot.stopReason === "toolUse") {
       if (!snapshot.text) return;
       for (const chunk of chunkLiveContext(snapshot.text)) {
-        this.#queueSend(
-          buildDelegationContextAppend(this.#activeDelegationId, chunk, "commentary"),
-        );
+        this.#queueSend(buildDelegationContextAppend(oldest.id, chunk, "commentary"));
       }
       return;
     }
-    if (snapshot.text) this.#pendingAgentFinal = snapshot.text;
-    else if (snapshot.errorMessage) this.#pendingAgentFinal = snapshot.errorMessage;
+    // Every consumed request was in context for this reply, so it answers all of them.
+    this.#sendFinal(oldest, snapshot.text || snapshot.errorMessage || NO_FINAL_TEXT);
+    for (const delegation of covered) this.#sendFinal(delegation, COVERED_FINAL_TEXT);
+    this.#refreshAudioPhase();
   }
 
+  /**
+   * Closes consumed delegations that got no final reply. Unconsumed ones stay open: their steer
+   * can still start the next run.
+   */
   handleAgentSettled(): void {
-    const delegationId = this.#activeDelegationId;
-    if (!delegationId || this.#stopped) return;
-    const finalText =
-      this.#pendingAgentFinal || "The requested coding task ended without a final response.";
-    const context = `"Agent Final Message":\n\n${finalText}`;
-    for (const chunk of chunkLiveContext(context)) {
-      this.#queueSend(buildDelegationContextAppend(delegationId, chunk));
-    }
-    this.#activeDelegationId = undefined;
-    this.#pendingAgentFinal = "";
+    if (this.#stopped) return;
+    const consumed = this.#openDelegations.filter((delegation) => delegation.consumed);
+    if (consumed.length === 0) return;
+    for (const delegation of consumed) this.#sendFinal(delegation, NO_FINAL_TEXT);
     this.#refreshAudioPhase();
   }
 
@@ -349,20 +407,48 @@ export class LiveSessionController {
       .join("\n")
       .trim();
     if (!request) return;
-    this.#activeDelegationId = event.item.id;
-    this.#pendingAgentFinal = "";
+    const text = renderLiveDelegation(request, this.#transcriptDelta);
+    this.#transcriptDelta = [];
+    this.#delegatedTurnText = {
+      user: { turn: this.#userTranscriptTurn, text: this.#userTranscript },
+      assistant: { turn: this.#assistantTranscriptTurn, text: this.#assistantTranscript },
+    };
+    this.#openDelegations.push({ id: event.item.id, request: text, consumed: false });
     this.#emitPhase("working");
     try {
-      this.#options.delegate(request);
+      this.#options.delegate(text);
     } catch (cause) {
       this.#reportFailure(errorFrom(cause));
+    }
+  }
+
+  // ponytail: matches Pi's custom message by its exact content, so index.ts needs no change.
+  // Pi keeps the string content unchanged from sendMessage to message_end.
+  #markConsumed(content: unknown): void {
+    const index = this.#openDelegations.findIndex(
+      (delegation) => !delegation.consumed && delegation.request === content,
+    );
+    const delegation = this.#openDelegations[index];
+    if (!delegation) return;
+    // Pi consumes steers in FIFO order, so an older unconsumed request was dropped (for example,
+    // Pi cleared its queue on abort). Close it instead of leaving voice waiting forever.
+    for (const dropped of this.#openDelegations.slice(0, index)) {
+      if (!dropped.consumed) this.#sendFinal(dropped, DROPPED_FINAL_TEXT);
+    }
+    delegation.consumed = true;
+  }
+
+  #sendFinal(delegation: OpenDelegation, text: string): void {
+    this.#openDelegations = this.#openDelegations.filter((open) => open !== delegation);
+    for (const chunk of chunkLiveContext(`"Agent Final Message":\n\n${text}`)) {
+      this.#queueSend(buildDelegationContextAppend(delegation.id, chunk));
     }
   }
 
   #handleOutputLevel(level: number): void {
     this.#outputLevel = clampLevel(level);
     this.#emitLevels();
-    if (!this.#activeDelegationId) this.#refreshAudioPhase();
+    if (this.#openDelegations.length === 0) this.#refreshAudioPhase();
   }
 
   #handleMicrophoneAudio(samples: Float32Array): void {
@@ -442,6 +528,7 @@ export class LiveSessionController {
     const normalized = text.trim();
     if (!normalized) return;
     const turn = role === "user" ? this.#userTranscriptTurn : this.#assistantTranscriptTurn;
+    this.#trackTranscriptDelta(role, turn, normalized);
     if (role === "user") {
       this.#userTranscript = normalized;
       this.#userTranscriptFinal = final;
@@ -460,6 +547,27 @@ export class LiveSessionController {
     this.#emitTranscript({ role, turn, text: normalized, final });
   }
 
+  /** Keeps the text of each transcript turn that no delegation has carried yet. */
+  #trackTranscriptDelta(role: LiveTranscript["role"], turn: number, text: string): void {
+    const delegated = this.#delegatedTurnText[role];
+    let delta = text;
+    if (delegated?.turn === turn && delegated.text) {
+      if (delegated.text.startsWith(text)) delta = "";
+      else if (text.startsWith(delegated.text)) delta = text.slice(delegated.text.length).trim();
+    }
+    const index = this.#transcriptDelta.findIndex(
+      (entry) => entry.role === role && entry.turn === turn,
+    );
+    const existing = this.#transcriptDelta[index];
+    if (!delta) {
+      if (existing) this.#transcriptDelta.splice(index, 1);
+    } else if (existing) {
+      existing.text = delta;
+    } else {
+      this.#transcriptDelta.push({ role, turn, text: delta });
+    }
+  }
+
   #queueSend(message: LiveClientMessage): void {
     const transport = this.#transport;
     if (!transport || this.#stopped) return;
@@ -474,7 +582,7 @@ export class LiveSessionController {
     if (this.#stopped) return;
     if (this.#muted) this.#emitPhase("muted");
     else if (!this.#connected) this.#emitPhase("connecting");
-    else if (this.#activeDelegationId) this.#emitPhase("working");
+    else if (this.#openDelegations.length > 0) this.#emitPhase("working");
     else if (this.#outputLevel > OUTPUT_ACTIVE_LEVEL) this.#emitPhase("speaking");
     else this.#emitPhase("listening");
   }
