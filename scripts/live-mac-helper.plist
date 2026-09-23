@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd template for scripts/live-mac-helper.sh. Replace every __PLACEHOLDER__:
+    __HELPER__  absolute path of live-mac-helper.sh
+    __HOST__    SSH host of the pi machine (a Host entry that works with BatchMode)
+    __PORT__    live.browserPort of that pi
+    __LOG__     absolute path of the log file, for example ~/Library/Logs/pi-live-helper.log
+  Check with `plutil -lint`, then `launchctl bootstrap gui/$(id -u) <this file>`.
+  Remove with `launchctl bootout gui/$(id -u)/ai.smartypants.pi-better-openai.live-helper`.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.smartypants.pi-better-openai.live-helper</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>__HELPER__</string>
+    <string>__HOST__</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PBO_LIVE_PORT</key>
+    <string>__PORT__</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>__LOG__</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG__</string>
+</dict>
+</plist>

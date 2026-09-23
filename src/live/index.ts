@@ -17,11 +17,8 @@ import {
   type LiveFloorArbiterLike,
   type LiveFloorArbiterOptions,
 } from "./queue.ts";
-import {
-  type BrowserLiveAudio,
-  readOrCreateBrowserToken,
-  startBrowserLiveAudio,
-} from "./browser.ts";
+import { type BrowserLiveAudio, createBrowserToken, startBrowserLiveAudio } from "./browser.ts";
+import { liveStatePath } from "./state.ts";
 import { liveGatewayRoot } from "./transport.ts";
 import { LiveVisualizer, LIVE_VISUALIZER_TOGGLE_KEY } from "./visualizer.ts";
 
@@ -145,7 +142,8 @@ export function registerOpenAILive(
   const notifyUnfocused = dependencies.notifyActivatedUnfocused ?? notifyActivatedUnfocused;
   const startBrowserAudio =
     dependencies.startBrowserAudio ??
-    ((port: number) => startBrowserLiveAudio({ port, token: readOrCreateBrowserToken() }));
+    ((port: number) =>
+      startBrowserLiveAudio({ port, token: createBrowserToken(), statePath: liveStatePath() }));
   const tickMs = dependencies.tickMs ?? LIVE_QUEUE_TICK_MS;
   let activeRun: ActiveLiveRun | undefined;
   let settling: Promise<void> | undefined;
@@ -196,6 +194,14 @@ export function registerOpenAILive(
         `Live audio page: ${browserAudio.url} (remote pi: ssh -L ${cfg.live.browserPort}:127.0.0.1:${cfg.live.browserPort})`,
         "info",
       );
+      if (browserAudio.stateError) {
+        ctx.ui.notify(
+          sanitizeDiagnosticError(
+            `Live state file not written, so a helper cannot open the page: ${browserAudio.stateError.message}`,
+          ),
+          "warning",
+        );
+      }
     }
 
     let ownRun = undefined as ActiveLiveRun | undefined;

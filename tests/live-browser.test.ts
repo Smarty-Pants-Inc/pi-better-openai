@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -8,7 +8,7 @@ import {
   CLOSE_REJECTED,
   CLOSE_STOPPED,
   isAllowedLoopbackRequest,
-  readOrCreateBrowserToken,
+  createBrowserToken,
   startBrowserLiveAudio,
 } from "../src/live/browser.ts";
 import { BROWSER_PAGE_HTML } from "../src/live/browser-page.ts";
@@ -114,15 +114,35 @@ describe("browser live audio", () => {
     expect(isAllowedLoopbackRequest(undefined)).toBe(false);
   });
 
-  test("keeps a private reusable page token", () => {
-    const dir = mkdtempSync(join(tmpdir(), "live-token-"));
+  test("makes a new private page token for each run", () => {
+    const token = createBrowserToken();
+    expect(token).toMatch(/^[\w-]{32,}$/);
+    expect(createBrowserToken()).not.toBe(token);
+  });
+
+  test("publishes the live state while serving and removes it on close", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "live-state-"));
     try {
-      const path = join(dir, "nested", "token");
-      const token = readOrCreateBrowserToken(path);
-      expect(token).toMatch(/^[\w-]{32,}$/);
-      expect(readOrCreateBrowserToken(path)).toBe(token);
-      expect(readFileSync(path, "utf8").trim()).toBe(token);
-      expect(statSync(path).mode & 0o777).toBe(0o600);
+      const statePath = join(dir, "state", "live.json");
+      const bound = await startBrowserLiveAudio({ port: 0, token: TOKEN, statePath });
+      const record = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
+      expect(record).toMatchObject({ url: bound.url, pid: process.pid });
+      expect(record.port).toBe(Number(new URL(bound.url).port));
+      expect(Number.isNaN(Date.parse(String(record.startedAt)))).toBe(false);
+      expect(statSync(statePath).mode & 0o777).toBe(0o600);
+      expect(bound.stateError).toBeUndefined();
+      await bound.close();
+      expect(existsSync(statePath)).toBe(false);
+
+      const blocked = join(dir, "file");
+      writeFileSync(blocked, "");
+      const unwritable = await startBrowserLiveAudio({
+        port: 0,
+        token: TOKEN,
+        statePath: join(blocked, "live.json"),
+      });
+      expect(unwritable.stateError).toBeInstanceOf(Error);
+      await unwritable.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

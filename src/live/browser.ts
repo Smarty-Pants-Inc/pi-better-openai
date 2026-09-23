@@ -1,12 +1,10 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
-import { dirname, join } from "node:path";
 import type { Duplex } from "node:stream";
 import WebSocket, { type RawData, WebSocketServer } from "ws";
-import { piAgentDir } from "../paths.ts";
 import { BROWSER_PAGE_HTML } from "./browser-page.ts";
 import type { LiveAudioCapture, LiveNativeBindings, LiveWebRtcPeerInstance } from "./native.ts";
+import { type LiveStateRecord, removeLiveState, writeLiveState } from "./state.ts";
 
 // Browser audio: a loopback page is the WebRTC media peer, so pi can run on a
 // host without audio devices (for example over SSH with `ssh -L PORT:127.0.0.1:PORT`).
@@ -19,7 +17,6 @@ const DEFAULT_OPEN_TIMEOUT_MS = 15_000;
 // of streaming PCM. Revisit if the controller starts consuming real samples.
 const LEVEL_FRAME_SAMPLES = 1_600;
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
-const TOKEN_PATTERN = /^[\w-]{32,}$/;
 
 export const CLOSE_REPLACED = 4000;
 export const CLOSE_REJECTED = 4001;
@@ -35,6 +32,8 @@ type PageMessage =
 export interface BrowserLiveAudio {
   readonly url: string;
   readonly native: LiveNativeBindings;
+  /** Set when options.statePath was given but the state file could not be written. */
+  readonly stateError?: Error;
   close(): Promise<void>;
 }
 
@@ -42,21 +41,13 @@ export interface BrowserLiveAudioOptions {
   port: number;
   token: string;
   host?: string;
+  /** Where to publish the live state for a helper; omitted means no state file. */
+  statePath?: string;
 }
 
-export function readOrCreateBrowserToken(
-  path = join(piAgentDir(), "pi-better-openai", "live-browser-token"),
-): string {
-  try {
-    const existing = readFileSync(path, "utf8").trim();
-    if (TOKEN_PATTERN.test(existing)) return existing;
-  } catch {
-    // Created below.
-  }
-  const token = randomBytes(24).toString("base64url");
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, `${token}\n`, { mode: 0o600 });
-  return token;
+/** A new token for each /live run, so old URLs in scrollback or history stop working. */
+export function createBrowserToken(): string {
+  return randomBytes(24).toString("base64url");
 }
 
 /** Accepts only loopback Host values, and same-origin loopback Origin values when present. */
@@ -351,10 +342,29 @@ export async function startBrowserLiveAudio(
     __ompInstallTokioRuntime: () => {},
   };
 
+  const port = (server.address() as { port: number }).port;
+  const url = `http://localhost:${port}/#${options.token}`;
+  const state: LiveStateRecord = {
+    port,
+    url,
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+  };
+  let stateError: Error | undefined;
+  if (options.statePath) {
+    try {
+      writeLiveState(options.statePath, state);
+    } catch (cause) {
+      stateError = cause instanceof Error ? cause : new Error(String(cause));
+    }
+  }
+
   return {
-    url: `http://localhost:${(server.address() as { port: number }).port}/#${options.token}`,
+    url,
     native,
+    ...(stateError ? { stateError } : {}),
     close: async () => {
+      if (options.statePath) removeLiveState(options.statePath, state);
       await Promise.all([...peers].map((peer) => peer.close()));
       client = undefined;
       // Let pages receive the stop code so they do not retry, then force the rest.
