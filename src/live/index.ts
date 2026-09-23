@@ -250,7 +250,7 @@ export function registerOpenAILive(
     let done: (result: LiveUiResult) => void = () => undefined;
     const ui = new Promise<LiveUiResult>((resolve) => (done = resolve));
     let removeKeys: (() => void) | undefined;
-    // The status sits on the editor's top border: the call adds no rows and Pi's editor keeps
+    // The status sits on the editor's bottom border: the call adds no rows and Pi's editor keeps
     // the keyboard. startRun runs once, from the first editor the factory builds.
     const startRun = (tui: TUI): LiveVisualizer => {
       let completed = false;

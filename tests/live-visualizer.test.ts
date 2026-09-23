@@ -7,6 +7,7 @@ import {
   embedInBorder,
   LiveVisualizer,
   liveKeyAction,
+  liveSegmentWidth,
 } from "../src/live/visualizer.ts";
 
 const theme = {
@@ -45,7 +46,7 @@ function makeCall(phase: LivePhase = "listening"): LiveVisualizer {
 }
 
 describe("live status on the editor border", () => {
-  test.each([80, 120, 200])("keeps the editor's rows and width at %i columns", (width) => {
+  test.each([60, 80, 120, 200])("changes only the bottom border at %i columns", (width) => {
     const editor = makeEditor();
     const base = editor.render(width);
     const visualizer = makeCall();
@@ -53,18 +54,96 @@ describe("live status on the editor border", () => {
       decorateEditorWithLive(editor, (maxWidth) => visualizer.renderSegment(maxWidth));
       const lines = editor.render(width);
       expect(lines).toHaveLength(base.length);
-      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-      expect(visibleWidth(lines[0]!)).toBe(width);
-      // Only the top border changes; text, cursor, paste markers, and autocomplete rows do not.
-      expect(lines.slice(1)).toEqual(base.slice(1));
-      expect(lines[0]).toMatch(/^──/);
-      expect(lines[0]).toMatch(/─$/);
-      expect(lines[0]).toContain("listening");
-      expect(lines[0]).toContain("you › ");
-      expect(lines[0]).toContain("live › ");
-      // The newest speaker renders last and keeps its latest words.
-      expect(lines[0]!.indexOf("live › ")).toBeGreaterThan(lines[0]!.indexOf("you › "));
-      expect(lines[0]).toContain("minute ago");
+      // Only the last line changes; the top border (Pi's working indicator), text, and cursor do not.
+      expect(lines.slice(0, -1)).toEqual(base.slice(0, -1));
+      const bottom = lines.at(-1)!;
+      expect(visibleWidth(bottom)).toBe(width);
+      const segmentWidth = liveSegmentWidth(width);
+      expect(bottom.slice(0, width - segmentWidth - 1)).toBe("─".repeat(width - segmentWidth - 1));
+      expect(bottom).toMatch(/ ─$/);
+      // One speaker at a time: the newest speaker only.
+      expect(bottom).toContain("live › ");
+      expect(bottom).not.toContain("you › ");
+    } finally {
+      visualizer.dispose();
+    }
+  });
+
+  test.each([60, 80, 120, 200])(
+    "keeps a fixed width as speech streams in at %i columns",
+    (width) => {
+      const editor = makeEditor();
+      const visualizer = new LiveVisualizer({ theme, requestRender: vi.fn() });
+      try {
+        visualizer.setPhase("speaking");
+        decorateEditorWithLive(editor, (maxWidth) => visualizer.renderSegment(maxWidth));
+        const words = "sure the build on dev two finished green about a minute ago".split(" ");
+        const starts = new Set<number>();
+        for (let count = 1; count <= words.length; count += 1) {
+          const text = words.slice(0, count).join(" ");
+          visualizer.setTranscript({ role: "assistant", text, turn: 1, final: false });
+          const bottom = editor.render(width).at(-1)!;
+          expect(visibleWidth(bottom)).toBe(width);
+          starts.add(bottom.search(/[^─]/));
+          expect(bottom).toContain(words[count - 1]);
+        }
+        expect([...starts]).toEqual([width - liveSegmentWidth(width) - 1]);
+      } finally {
+        visualizer.dispose();
+      }
+    },
+  );
+
+  test("the segment is about 40 columns, at most 45% of the terminal", () => {
+    expect(liveSegmentWidth(60)).toBe(27);
+    expect(liveSegmentWidth(80)).toBe(36);
+    expect(liveSegmentWidth(120)).toBe(40);
+    expect(liveSegmentWidth(200)).toBe(40);
+  });
+
+  test("truncates long speech on the left and shows its newest words", () => {
+    const visualizer = new LiveVisualizer({ theme, requestRender: vi.fn() });
+    try {
+      visualizer.setPhase("speaking");
+      visualizer.setTranscript({
+        role: "assistant",
+        text: "the first words scroll away while the newest words stay visible",
+        turn: 1,
+        final: false,
+      });
+      const segment = visualizer.renderSegment(40);
+      expect(visibleWidth(segment)).toBe(40);
+      expect(segment.endsWith("live › …st words stay visible ")).toBe(true);
+      expect(segment).not.toContain("first words");
+    } finally {
+      visualizer.dispose();
+    }
+  });
+
+  test("shows only the current speaker", () => {
+    const visualizer = new LiveVisualizer({ theme, requestRender: vi.fn() });
+    try {
+      visualizer.setPhase("listening");
+      visualizer.setTranscript({ role: "user", text: "check the build", turn: 1, final: false });
+      let segment = visualizer.renderSegment(40);
+      expect(segment).toContain("you › check the build");
+      expect(segment).not.toContain("live ›");
+
+      visualizer.setPhase("speaking");
+      visualizer.setTranscript({ role: "assistant", text: "it is green", turn: 1, final: false });
+      segment = visualizer.renderSegment(40);
+      expect(segment).toContain("live › it is green");
+      expect(segment).not.toContain("you ›");
+
+      // A late final user transcript does not replace the voice's words while it speaks.
+      visualizer.setTranscript({ role: "user", text: "check the build?", turn: 1, final: true });
+      expect(visualizer.renderSegment(40)).toContain("live › it is green");
+
+      visualizer.setPhase("listening");
+      visualizer.setTranscript({ role: "user", text: "thanks", turn: 2, final: false });
+      segment = visualizer.renderSegment(40);
+      expect(segment).toContain("you › thanks");
+      expect(segment).not.toContain("live ›");
     } finally {
       visualizer.dispose();
     }
@@ -82,19 +161,14 @@ describe("live status on the editor border", () => {
         );
         expect(visibleWidth(line)).toBe(width);
       }
-      const at = (width: number) =>
-        embedInBorder(
-          "─".repeat(width),
-          width,
-          (max) => visualizer.renderSegment(max),
-          plainBorder,
-        );
-      expect(at(40)).toContain("live › ");
-      expect(at(40)).not.toContain("you › ");
-      expect(at(24)).toContain("speaking");
-      expect(at(24)).not.toContain("›");
-      expect(at(14)).toContain("»");
-      expect(at(14)).not.toContain("speaking");
+      for (let width = 3; width <= 60; width += 1) {
+        expect(visibleWidth(visualizer.renderSegment(width))).toBe(width);
+      }
+      expect(visualizer.renderSegment(24)).toContain("live › ");
+      expect(visualizer.renderSegment(20)).toContain("speaking");
+      expect(visualizer.renderSegment(20)).not.toContain("›");
+      expect(visualizer.renderSegment(12)).toContain("»");
+      expect(visualizer.renderSegment(12)).not.toContain("speaking");
     } finally {
       visualizer.dispose();
     }
@@ -104,30 +178,55 @@ describe("live status on the editor border", () => {
     const visualizer = new LiveVisualizer({ theme, requestRender: vi.fn() });
     try {
       visualizer.setPhase("muted");
-      const segment = visualizer.renderSegment(78);
-      expect(segment).toContain("× muted · space mute · esc end");
+      expect(visualizer.renderSegment(40)).toContain("× muted · space mute · esc end");
       visualizer.setTranscript({ role: "user", text: "hi", turn: 1, final: true });
-      expect(visualizer.renderSegment(78)).toContain("muted · you › hi");
+      expect(visualizer.renderSegment(40)).toContain("× you › hi");
       visualizer.setTranscript(undefined);
-      expect(visualizer.renderSegment(78)).toContain("space mute");
+      expect(visualizer.renderSegment(40)).toContain("space mute");
     } finally {
       visualizer.dispose();
     }
   });
 
-  test("keeps Pi's working indicator and scroll label on the border", () => {
+  test("keeps the scroll label, and leaves a line of unexpected shape unchanged", () => {
     const visualizer = makeCall();
     try {
-      const busy = `── ⠋ Working... ${"─".repeat(64)}`;
-      const line = embedInBorder(busy, 80, (max) => visualizer.renderSegment(max), plainBorder);
-      expect(line.startsWith("── ⠋ Working... ─")).toBe(true);
+      const scrolled = `${"─".repeat(10)} ↓ 3 more ${"─".repeat(60)}`;
+      const line = embedInBorder(scrolled, 80, (max) => visualizer.renderSegment(max), plainBorder);
+      expect(line.startsWith(`${"─".repeat(10)} ↓ 3 more ─`)).toBe(true);
       expect(visibleWidth(line)).toBe(80);
-      expect(line).toContain("listening");
-      // Too little room leaves the editor's border untouched.
+      expect(line).toContain("live › ");
       const crowded = `── ${"x".repeat(74)} ──`;
       expect(embedInBorder(crowded, 80, (max) => visualizer.renderSegment(max), plainBorder)).toBe(
         crowded,
       );
+      const row = `  /model ${" ".repeat(71)}`;
+      expect(embedInBorder(row, 80, (max) => visualizer.renderSegment(max), plainBorder)).toBe(row);
+    } finally {
+      visualizer.dispose();
+    }
+  });
+
+  test("finds the bottom border above autocomplete rows", () => {
+    const rows = ["─".repeat(80), "hello", "─".repeat(80), "  /model", "  /live"];
+    const editor = {
+      renderedAutocompleteHeight: 2,
+      render: (_width: number) => rows,
+      invalidate() {},
+    };
+    const visualizer = makeCall();
+    try {
+      decorateEditorWithLive(editor, (max) => visualizer.renderSegment(max));
+      const lines = editor.render(80);
+      expect(lines).toHaveLength(rows.length);
+      expect(lines[2]).not.toBe(rows[2]);
+      expect(lines[2]).toContain("live › ");
+      expect([lines[0], lines[1], lines[3], lines[4]]).toEqual([
+        rows[0],
+        rows[1],
+        rows[3],
+        rows[4],
+      ]);
     } finally {
       visualizer.dispose();
     }

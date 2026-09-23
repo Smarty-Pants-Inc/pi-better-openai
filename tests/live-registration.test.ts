@@ -277,11 +277,11 @@ describe("registerOpenAILive", () => {
     const ctx = makeContext(ui);
 
     await commandFrom(harness).handler("", ctx);
-    // The status is drawn on Pi's editor border, not a custom UI or widget that adds rows.
+    // The status is drawn on the bottom border of Pi's editor, not a custom UI or widget that adds rows.
     expect(ui.custom).not.toHaveBeenCalled();
     expect(ui.setEditorComponent).toHaveBeenCalledWith(expect.any(Function));
     expect(state.editor.render(60)).toHaveLength(3);
-    expect(state.editor.render(60)[0]).toContain("standby");
+    expect(state.editor.render(60).at(-1)).toContain("standby");
     expect(live.isActive()).toBe(true);
     await vi.waitFor(() => {
       requireCallbacks(arbiter);
@@ -291,7 +291,7 @@ describe("registerOpenAILive", () => {
     await vi.waitFor(() => expect(live.isActive()).toBe(false));
     expect(ui.setEditorComponent).toHaveBeenLastCalledWith(undefined);
     expect(state.editor).toBe(state.defaultEditor);
-    expect(state.editor.render(60)[0]).toBe("─".repeat(60));
+    expect(state.editor.render(60).at(-1)).toBe("─".repeat(60));
     expect(state.removeKeys).toHaveBeenCalledOnce();
 
     expect(sessions).toHaveLength(1);
@@ -332,7 +332,7 @@ describe("registerOpenAILive", () => {
       requireCallbacks(arbiter);
     });
     expect(arbiter.options?.policy).toBe("fifo");
-    const rendered = state.editor.render(60)[0];
+    const rendered = state.editor.render(60).at(-1);
     expect(rendered).toContain("standby");
 
     requireCallbacks(arbiter).onActivated("fifo");
@@ -343,7 +343,7 @@ describe("registerOpenAILive", () => {
     await vi.waitFor(() => {
       if (sessions[0]!.stop.mock.calls.length !== 1) throw new Error("session not parked yet");
     });
-    expect(state.editor.render(60)[0]).toContain("standby");
+    expect(state.editor.render(60).at(-1)).toContain("standby");
     expect(live.isActive()).toBe(true);
 
     // A second /live ends the call.
@@ -390,7 +390,7 @@ describe("registerOpenAILive", () => {
     await vi.waitFor(() => expect(live.isActive()).toBe(false));
     expect(ui.getEditorComponent()).toBe(otherFactory);
     expect(state.editor).not.toBe(liveEditor);
-    expect(state.editor.render(80)[0]).toBe("─".repeat(80));
+    expect(state.editor.render(80).at(-1)).toBe("─".repeat(80));
     expect(state.editor.history).toEqual(["typed during the call"]);
   });
 
