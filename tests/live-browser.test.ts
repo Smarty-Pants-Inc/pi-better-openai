@@ -1,7 +1,8 @@
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { runInNewContext } from "node:vm";
+import { describe, expect, test, vi } from "vitest";
 import WebSocket from "ws";
 import {
   CLOSE_REJECTED,
@@ -10,6 +11,7 @@ import {
   readOrCreateBrowserToken,
   startBrowserLiveAudio,
 } from "../src/live/browser.ts";
+import { BROWSER_PAGE_HTML } from "../src/live/browser-page.ts";
 
 const TOKEN = "t".repeat(32);
 
@@ -37,6 +39,70 @@ function openPage(port: number, token: string, origin = `http://localhost:${port
   const closed = new Promise<number>((resolve) => socket.once("close", (code) => resolve(code)));
   const send = (message: Record<string, unknown>) => socket.send(JSON.stringify(message));
   return { socket, opened, closed, next, send };
+}
+
+// Runs the page script with the smallest fakes of the browser APIs it uses.
+function runPageScript() {
+  const elements = new Map<string, Record<string, unknown>>();
+  const element = (id: string) => {
+    if (!elements.has(id)) elements.set(id, { textContent: "", hidden: true, value: 0 });
+    return elements.get(id)!;
+  };
+  const sent: Array<Record<string, unknown>> = [];
+  let socket: Record<string, (event?: unknown) => void> | undefined;
+  let channel: Record<string, () => void> | undefined;
+  const track = { enabled: true, stop() {} };
+  class FakeWebSocket {
+    static OPEN = 1;
+    readyState = 1;
+    constructor() {
+      socket = this as unknown as typeof socket;
+    }
+    send(data: string) {
+      sent.push(JSON.parse(data) as Record<string, unknown>);
+    }
+  }
+  class FakePeerConnection {
+    iceGatheringState = "complete";
+    localDescription = { sdp: "v=0 offer" };
+    addTrack() {}
+    createDataChannel() {
+      channel = {};
+      return channel;
+    }
+    async createOffer() {
+      return {};
+    }
+    async setLocalDescription() {}
+    close() {}
+  }
+  const script = /<script>([\s\S]*)<\/script>/.exec(BROWSER_PAGE_HTML)?.[1] ?? "";
+  runInNewContext(script, {
+    location: { hash: `#${TOKEN}`, protocol: "http:", host: "localhost:1" },
+    window: { isSecureContext: true },
+    navigator: {
+      mediaDevices: {
+        getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }),
+      },
+    },
+    document: { getElementById: element },
+    Audio: class {},
+    AudioContext: class {
+      async resume() {}
+    },
+    WebSocket: FakeWebSocket,
+    RTCPeerConnection: FakePeerConnection,
+    setTimeout,
+  });
+  return {
+    status: () => element("status").textContent,
+    enable: () => (element("enable").onclick as () => Promise<void>)(),
+    openSocket: () => socket?.onopen?.(),
+    receive: (message: Record<string, unknown>) =>
+      socket?.onmessage?.({ data: JSON.stringify(message) }),
+    openChannel: () => channel?.onopen?.(),
+    sent,
+  };
 }
 
 describe("browser live audio", () => {
@@ -137,5 +203,27 @@ describe("browser live audio", () => {
     } finally {
       await bound.close();
     }
+  });
+
+  test("page status follows mute and the call state", async () => {
+    const page = runPageScript();
+    page.openSocket();
+    await page.enable();
+    page.receive({ type: "offer.request" });
+    await vi.waitFor(() =>
+      expect(page.sent.some((message) => message.type === "offer")).toBe(true),
+    );
+    expect(page.status()).toBe("Connecting voice…");
+
+    page.receive({ type: "mute", muted: true });
+    expect(page.status()).toBe("Muted in pi.");
+    page.receive({ type: "mute", muted: false });
+    expect(page.status()).toBe("Connecting voice…");
+
+    page.receive({ type: "mute", muted: true });
+    page.openChannel();
+    expect(page.status()).toBe("Muted in pi.");
+    page.receive({ type: "mute", muted: false });
+    expect(page.status()).toBe("Live. Speak to pi.");
   });
 });

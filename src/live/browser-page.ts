@@ -28,14 +28,19 @@ const token = decodeURIComponent(location.hash.slice(1));
 const $ = (id) => document.getElementById(id);
 const audio = new Audio();
 audio.autoplay = true;
-let ws, pc, stream, context, stopMeter, retry = 0, unlocked = false;
+let ws, pc, stream, context, stopMeter, retry = 0, unlocked = false, live = false;
 let unlockWaiters = [];
 
 function status(text) { $("status").textContent = text; }
 function send(message) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message)); }
 function idleText() { return unlocked ? "Connected to pi. Waiting for /live to take the floor…" : "Connected to pi. Click Enable audio."; }
+function callText() {
+  if (stream && stream.getAudioTracks().every((track) => !track.enabled)) return "Muted in pi.";
+  return live ? "Live. Speak to pi." : "Connecting voice…";
+}
 
 function hangup() {
+  live = false;
   if (stopMeter) { stopMeter(); stopMeter = undefined; }
   if (pc) { pc.close(); pc = undefined; }
   if (stream) { stream.getTracks().forEach((track) => track.stop()); stream = undefined; }
@@ -98,7 +103,7 @@ async function startCall() {
   pc = connection;
   stream.getTracks().forEach((track) => connection.addTrack(track, stream));
   const channel = connection.createDataChannel("oai-events");
-  channel.onopen = () => { send({ type: "open" }); status("Live. Speak to pi."); };
+  channel.onopen = () => { live = true; send({ type: "open" }); status(callText()); };
   channel.onmessage = (event) => send({ type: "event", payload: String(event.data) });
   connection.ontrack = (event) => {
     audio.srcObject = event.streams[0];
@@ -120,7 +125,7 @@ async function handle(message) {
   else if (message.type === "answer" && pc) await pc.setRemoteDescription({ type: "answer", sdp: message.sdp });
   else if (message.type === "mute" && stream) {
     stream.getAudioTracks().forEach((track) => { track.enabled = !message.muted; });
-    status(message.muted ? "Muted in pi." : "Live. Speak to pi.");
+    status(callText());
   } else if (message.type === "hangup") { hangup(); status(idleText()); }
 }
 
