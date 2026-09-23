@@ -339,6 +339,10 @@ export async function startBrowserLiveAudio(
       resolve();
     });
   });
+  // An unhandled server error would crash pi; end the current call with the reason instead.
+  server.on("error", (error) => {
+    for (const peer of peers) peer.fail(`Browser audio server error: ${error.message}`);
+  });
 
   const native: LiveNativeBindings = {
     AudioCapture: BrowserAudioCapture,
