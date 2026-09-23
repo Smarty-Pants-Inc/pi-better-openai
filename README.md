@@ -133,12 +133,12 @@ Daybreak models require separate OpenAI approval and provisioning. pi currently 
 
 ## Live voice
 
-Run `/live` or press `Ctrl+Shift+L` to start realtime voice. `Ctrl+L` remains pi's model selector, so the extension deliberately uses the shifted chord. The call status is drawn right-aligned on the top border of pi's editor, so it adds no rows, and you can keep typing during a call:
+Run `/live` or press `Ctrl+Shift+L` to start realtime voice. `Ctrl+L` remains pi's model selector, so the extension deliberately uses the shifted chord. The call status is drawn right-aligned on the bottom border of pi's editor, so it adds no rows, pi's working indicator keeps the top border, and you can keep typing during a call:
 
 - `Space` toggles microphone mute, and `Escape` ends the call, only while the editor is empty. With text in the editor, both keys edit as usual. While pi is streaming, the first `Escape` ends the call and a second `Escape` aborts pi's turn as usual.
 - `Ctrl+Shift+L` or `/live` ends the call at any time.
 - `Enter` sends typed text to pi as a normal message. Live voice also receives it as silent `[USER] ` context (the Codex realtime framing), so it knows what you asked; pi's answer is then spoken as a short update.
-- A small waveform reacts to microphone RMS level, next to the connecting, listening, working, speaking, muted, or error state and the latest words of both sides (`you ›` and `live ›`). In narrow terminals the transcript is dropped first, then the state label.
+- A small waveform reacts to microphone RMS level, next to the state icon and the latest words of the current speaker only: yours (`you ›`) while you speak, the voice's (`live ›`) while it speaks. The status has a fixed width (40 columns, at most 45% of the terminal), so it does not move as words stream in; long text shows its newest words after a leading `…`. Before anyone speaks it shows the state (connecting, listening, working, speaking, muted, or error) and the key hints. In narrow terminals the transcript is dropped first, then the state label.
 - Streaming speech transcripts stay in that status. Coding and repository requests are delegated into the current pi agent session; normal tool and assistant output continues in the transcript, and the final result is spoken back through the live session.
 
 Choose the spoken voice under **Live voice** in `/openai-settings`. Supported values are `arbor`, `breeze`, `cove`, `ember`, `juniper`, `maple`, `sol`, `spruce`, and `vale`.
