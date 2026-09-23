@@ -106,6 +106,8 @@ export type WebsearchConfig = {
   responseLength?: WebsearchResponseLength;
   maxOutputTokens?: number;
   timeoutMs?: number;
+  /** pi provider whose base URL and API key route web search, e.g. a CLIProxyAPI gateway. */
+  provider?: string;
 };
 
 export const LIVE_AUDIO_MODES = ["local", "browser"] as const;
@@ -206,6 +208,7 @@ export const DEFAULT_WEBSEARCH_CONFIG: Required<WebsearchConfig> = {
   responseLength: "short",
   maxOutputTokens: 4096,
   timeoutMs: 25_000,
+  provider: "",
 };
 
 export const DEFAULT_LIVE_CONFIG: Required<LiveConfig> = {
@@ -774,6 +777,8 @@ export function readConfig(path: string): ConfigFile | undefined {
       config.websearch.maxOutputTokens = parsed.websearch.maxOutputTokens;
     if (typeof parsed.websearch.timeoutMs === "number")
       config.websearch.timeoutMs = parsed.websearch.timeoutMs;
+    if (typeof parsed.websearch.provider === "string")
+      config.websearch.provider = parsed.websearch.provider.trim();
   }
   if (isRecord(parsed.live)) {
     config.live = {};
