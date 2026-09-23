@@ -364,6 +364,71 @@ describe("browser live audio", () => {
     expect(page.select("input").value).toBe("yealink");
   });
 
+  test("matches Chrome's suffixed Yealink labels on Paul's Mac and never a built-in device", async () => {
+    // Paul's Chrome device list; the system default is the built-in speakers.
+    const devices: FakeDevice[] = [
+      {
+        kind: "audioinput",
+        deviceId: "default",
+        label: "Default - MacBook Pro Microphone (Built-in)",
+      },
+      { kind: "audioinput", deviceId: "communications", label: "Communications - Yealink BT51" },
+      { kind: "audioinput", deviceId: "mic-mac", label: "MacBook Pro Microphone (Built-in)" },
+      { kind: "audioinput", deviceId: "mic-camo", label: "Camo Microphone (Virtual)" },
+      { kind: "audioinput", deviceId: "mic-phone", label: "Paul's iPhone Microphone" },
+      { kind: "audioinput", deviceId: "mic-y", label: "YEALINK BT51 (Bluetooth)" },
+      {
+        kind: "audiooutput",
+        deviceId: "default",
+        label: "Default - MacBook Pro Speakers (Built-in)",
+      },
+      { kind: "audiooutput", deviceId: "spk-mac", label: "MacBook Pro Speakers (Built-in)" },
+      { kind: "audiooutput", deviceId: "spk-y", label: "Yealink BT51 (6993:b0b1)" },
+    ];
+    const page = runPageScript({ devices });
+    page.openSocket();
+    page.receive({
+      type: "audio.defaults",
+      inputDevice: "Yealink BT51",
+      outputDevice: "Yealink BT51",
+    });
+    await page.enable();
+    await startPageCall(page);
+    page.remoteTrack();
+    await flush();
+
+    expect(page.openedMics.at(-1)).toBe("mic-y");
+    expect(page.sinks).toContainEqual(["audio", "spk-y"]);
+    expect(page.sinks).toContainEqual(["context", "spk-y"]);
+    expect(page.warning()).toBe("");
+  });
+
+  test("never picks another device when the Yealink is absent", async () => {
+    const page = runPageScript({
+      devices: [
+        { kind: "audioinput", deviceId: "default", label: "Default - MacBook Pro Microphone" },
+        { kind: "audioinput", deviceId: "mic-mac", label: "MacBook Pro Microphone" },
+        { kind: "audioinput", deviceId: "mic-camo", label: "Camo Microphone" },
+        { kind: "audiooutput", deviceId: "spk-mac", label: "MacBook Pro Speakers" },
+      ],
+    });
+    page.openSocket();
+    page.receive({
+      type: "audio.defaults",
+      inputDevice: "Yealink BT51",
+      outputDevice: "Yealink BT51",
+    });
+    await page.enable();
+    await startPageCall(page);
+    await flush();
+
+    // The system default, never an exact pick of "MacBook Pro Microphone".
+    expect(page.openedMics).not.toContain("mic-mac");
+    expect(page.openedMics.at(-1)).toBe("default");
+    expect(page.sinks.every(([, id]) => id === "")).toBe(true);
+    expect(page.warning()).toContain('"Yealink BT51" is not available');
+  });
+
   test("warns and falls back to the system default only once labels are known", async () => {
     const page = runPageScript({ devices: BUILT_IN });
     page.openSocket();
