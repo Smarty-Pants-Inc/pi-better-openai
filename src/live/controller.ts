@@ -3,6 +3,7 @@ import { loadLiveNative, type LiveAudioCapture, type LiveNativeBindings } from "
 import {
   buildDelegationContextAppend,
   buildSessionClose,
+  buildSessionContextAppend,
   chunkLiveContext,
   type LiveClientMessage,
   type LiveServerEvent,
@@ -21,7 +22,7 @@ The user is speaking to you. Respond directly, briefly, conversationally, and in
 
 You and the client coding agent are one assistant, not separate agents. The client has the active repository context, coding model, and tools. You must promptly create a client delegation for coding, repository investigation, tool use, commands, or verification. Include the complete request and relevant conversational context. Keep conversation natural while work runs.
 
-Treat delegation context as your own internal progress and result. Never mention a backend, delegation, protocol, or another assistant. Commentary context is silent progress and must not be recited. Context beginning with "Agent Final Message": is the final visible answer from your execution surface; present its useful result naturally as your own.
+Treat delegation context as your own internal progress and result. Never mention a backend, delegation, protocol, or another assistant. Commentary context is silent progress and must not be recited. Context beginning with "Agent Final Message": is the final visible answer from your execution surface; present its useful result naturally as your own. Other speakable context is a reply your execution surface gave to typed text or another agent; briefly tell the user what it says, without being asked.
 
 For greetings, clarification, or ordinary conversation that needs no tools, answer directly without delegating. Preserve one-assistant continuity: converse here, delegate execution, then communicate the returned result as your own.`;
 
@@ -300,10 +301,11 @@ export class LiveSessionController {
 
   /**
    * Receives every Pi `message_end`. Delegations are answered in FIFO order, and only after Pi
-   * has consumed them, so replies to other steers in the same run are never spoken.
+   * has consumed them. A final reply with no consumed delegation (typed input, a Fabric steer)
+   * goes to voice once as standalone speakable context, like Codex's standalone handoff.
    */
   handleAgentMessage(message: unknown): void {
-    if (this.#stopped || this.#openDelegations.length === 0) return;
+    if (this.#stopped) return;
     if (isRecord(message) && message.role === "custom") {
       this.#markConsumed(message.content);
       return;
@@ -312,7 +314,15 @@ export class LiveSessionController {
     if (!snapshot) return;
     const consumed = this.#openDelegations.filter((delegation) => delegation.consumed);
     const [oldest, ...covered] = consumed;
-    if (!oldest) return;
+    if (!oldest) {
+      // Tool-use commentary and aborted partial replies stay silent.
+      if (snapshot.text && snapshot.stopReason !== "toolUse" && snapshot.stopReason !== "aborted") {
+        for (const chunk of chunkLiveContext(snapshot.text)) {
+          this.#queueSend(buildSessionContextAppend(chunk, "speakable"));
+        }
+      }
+      return;
+    }
     if (snapshot.stopReason === "toolUse") {
       if (!snapshot.text) return;
       for (const chunk of chunkLiveContext(snapshot.text)) {
