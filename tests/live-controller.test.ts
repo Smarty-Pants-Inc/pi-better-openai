@@ -253,4 +253,72 @@ describe("LiveSessionController", () => {
 
     await controller.stop();
   });
+
+  test("restores the real phase after mute then unmute", async () => {
+    let transportOptions: LiveTransportOptions | undefined;
+    let connected: (() => void) | undefined;
+    const phases: string[] = [];
+    const controller = new LiveSessionController({
+      sessionId: "session-3",
+      native: fakeNative(),
+      getCredentials: vi.fn(async () => ({ accessToken: "token", accountId: "account" })),
+      delegate: vi.fn(),
+      createTransport: (options) => {
+        transportOptions = options;
+        return {
+          connect: () => new Promise<void>((resolve) => (connected = resolve)),
+          send: vi.fn(async () => undefined),
+          pushAudio: vi.fn(),
+          setMuted: vi.fn(),
+          close: vi.fn(async () => undefined),
+        };
+      },
+      createAudioCapture: () => ({ stop: vi.fn() }),
+      callbacks: {
+        onPhase: (phase) => phases.push(phase),
+        onLevels: vi.fn(),
+        onTranscript: vi.fn(),
+        onTerminal: vi.fn(),
+      },
+    });
+    const muteThenUnmute = () => {
+      controller.toggleMute();
+      expect(controller.phase).toBe("muted");
+      controller.toggleMute();
+    };
+
+    const started = controller.start();
+    await flushSends();
+    expect(controller.phase).toBe("connecting");
+    muteThenUnmute();
+    expect(controller.phase).toBe("connecting");
+    transportOptions?.callbacks.onOutputLevel(0);
+    expect(controller.phase).toBe("connecting");
+
+    connected?.();
+    await started;
+    expect(controller.phase).toBe("listening");
+
+    transportOptions?.callbacks.onOutputLevel(0.5);
+    expect(controller.phase).toBe("speaking");
+    muteThenUnmute();
+    expect(controller.phase).toBe("speaking");
+    transportOptions?.callbacks.onOutputLevel(0);
+
+    transportOptions?.callbacks.onEvent({
+      type: "delegation.created",
+      item: {
+        type: "delegation",
+        target: "client",
+        id: "delegation-3",
+        content: [{ type: "input_text", text: "Run the tests." }],
+      },
+    });
+    expect(controller.phase).toBe("working");
+    muteThenUnmute();
+    expect(controller.phase).toBe("working");
+
+    expect(phases).not.toContain("error");
+    await controller.stop();
+  });
 });

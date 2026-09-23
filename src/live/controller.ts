@@ -129,6 +129,7 @@ export class LiveSessionController {
   #sendChain: Promise<void> = Promise.resolve();
   #stopPromise: Promise<void> | undefined;
   #started = false;
+  #connected = false;
   #stopped = false;
   #terminalEmitted = false;
   #failure: Error | undefined;
@@ -211,6 +212,7 @@ export class LiveSessionController {
       await transport.connect();
       if (this.#stopped)
         throw this.#failure ?? new Error("The live session stopped while connecting.");
+      this.#connected = true;
       transport.setMuted(this.#muted);
       this.#refreshAudioPhase();
     } catch (cause) {
@@ -471,6 +473,7 @@ export class LiveSessionController {
   #refreshAudioPhase(): void {
     if (this.#stopped) return;
     if (this.#muted) this.#emitPhase("muted");
+    else if (!this.#connected) this.#emitPhase("connecting");
     else if (this.#activeDelegationId) this.#emitPhase("working");
     else if (this.#outputLevel > OUTPUT_ACTIVE_LEVEL) this.#emitPhase("speaking");
     else this.#emitPhase("listening");
