@@ -136,12 +136,23 @@ function boundDelegationField(text: string, retain: "start" | "end"): string {
     : `${TRUNCATION_MARKER}${escaped.slice(-kept)}`;
 }
 
+function normalizeWhitespace(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
+
 /** Codex `RealtimeDelegation` rendering: the handoff input plus the transcript since the last one. */
 export function renderLiveDelegation(
   input: string,
   transcriptDelta: readonly TranscriptEntry[],
 ): string {
-  const delta = transcriptDelta.map((entry) => `${entry.role}: ${entry.text}`).join("\n");
+  // Codex renders the whole active transcript, so its final user turn usually repeats the input.
+  // ponytail: drop that turn only when the input already holds all of its text, so no context is lost.
+  const last = transcriptDelta.at(-1);
+  const entries =
+    last?.role === "user" && normalizeWhitespace(input).includes(normalizeWhitespace(last.text))
+      ? transcriptDelta.slice(0, -1)
+      : transcriptDelta;
+  const delta = entries.map((entry) => `${entry.role}: ${entry.text}`).join("\n");
   const body = [`  <input>${boundDelegationField(input, "start")}</input>`];
   if (delta) {
     body.push(`  <transcript_delta>${boundDelegationField(delta, "end")}</transcript_delta>`);
