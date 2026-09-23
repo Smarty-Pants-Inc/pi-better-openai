@@ -87,7 +87,18 @@ async function startFakeSession() {
       .map(([message]) => message)
       .filter((message) => message.type === "session.context.append");
   };
-  return { controller, emit, delegation, delegate, consume, reply, finals, standalone, send };
+  return {
+    controller,
+    emit,
+    delegation,
+    delegate,
+    consume,
+    reply,
+    finals,
+    standalone,
+    send,
+    transportOptions: () => transportOptions,
+  };
 }
 
 const speakable = (text: string) => ({
@@ -357,7 +368,11 @@ describe("LiveSessionController", () => {
   });
 
   test("injects typed user text into the live context once, as silent [USER] context", async () => {
-    const { controller, send } = await startFakeSession();
+    const { controller, send, delegate, transportOptions } = await startFakeSession();
+    // Voice is told that Pi already handles typed text, so it must not delegate it again.
+    expect(transportOptions()?.instructions).toContain(
+      'Context beginning with "[USER] " is text the user typed to your execution surface, which is already handling it; use it as context and do not delegate it again.',
+    );
     controller.sendUserText("  What changed in the fleet?\n");
     controller.sendUserText("   ");
     await new Promise((resolve) => setImmediate(resolve));
@@ -368,6 +383,7 @@ describe("LiveSessionController", () => {
         content: [{ type: "input_text", text: "[USER] What changed in the fleet?" }],
       },
     ]);
+    expect(delegate).not.toHaveBeenCalled();
     await controller.stop();
     controller.sendUserText("Too late.");
     await new Promise((resolve) => setImmediate(resolve));

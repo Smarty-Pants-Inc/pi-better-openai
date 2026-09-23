@@ -135,7 +135,7 @@ Daybreak models require separate OpenAI approval and provisioning. pi currently 
 
 Run `/live` or press `Ctrl+Shift+L` to open the realtime voice panel. `Ctrl+L` remains pi's model selector, so the extension deliberately uses the shifted chord. The panel sits above pi's editor, and you can keep typing during a call:
 
-- `Space` toggles microphone mute, and `Escape` ends the call, only while the editor is empty. With text in the editor, both keys edit as usual.
+- `Space` toggles microphone mute, and `Escape` ends the call, only while the editor is empty. With text in the editor, both keys edit as usual. While pi is streaming, the first `Escape` ends the call and a second `Escape` aborts pi's turn as usual.
 - `Ctrl+Shift+L` or `/live` ends the call at any time.
 - `Enter` sends typed text to pi as a normal message. Live voice also receives it as silent `[USER] ` context (the Codex realtime framing), so it knows what you asked; pi's answer is then spoken as a short update.
 - The waveform reacts to microphone RMS level and the panel footer shows connecting, listening, working, speaking, muted, or error state.

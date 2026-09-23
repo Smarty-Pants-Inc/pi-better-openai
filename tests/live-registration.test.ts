@@ -133,7 +133,9 @@ function makeFakeUi(notify = vi.fn()) {
     component: undefined as (Component & { dispose?(): void }) | undefined,
     editorText: "",
     keyHandler: undefined as ((data: string) => { consume?: boolean } | undefined) | undefined,
-    removeKeys: vi.fn(),
+    removeKeys: vi.fn(() => {
+      state.keyHandler = undefined;
+    }),
   };
   const ui = {
     notify,
@@ -394,6 +396,10 @@ describe("registerOpenAILive", () => {
     expect(session.toggleMute).toHaveBeenCalledOnce();
     expect(key("x")).toBeUndefined();
     expect(key("\u001b")).toEqual({ consume: true });
+    // The first Esc ends the call and releases the keys, so a second Esc reaches Pi's own
+    // app.interrupt and aborts a streaming turn.
+    await vi.waitFor(() => expect(state.keyHandler).toBeUndefined());
+    expect(key("\u001b")).toBeUndefined();
     await vi.waitFor(() => expect(live.isActive()).toBe(false));
     expect(session.stop).toHaveBeenCalledOnce();
     expect(state.removeKeys).toHaveBeenCalledOnce();
@@ -408,6 +414,8 @@ describe("registerOpenAILive", () => {
       action: "continue",
     });
     expect(session.sendUserText).toHaveBeenCalledExactlyOnceWith("What changed?");
+    // Pi gets the typed text once, through its own submit; nothing is delegated on top of it.
+    expect(harness.pi.sendMessage).not.toHaveBeenCalled();
     input({ type: "input", text: "From another extension", source: "extension" }, {});
     input({ type: "input", text: "From RPC", source: "rpc" }, {});
     expect(session.sendUserText).toHaveBeenCalledOnce();
