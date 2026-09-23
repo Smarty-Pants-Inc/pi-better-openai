@@ -18,6 +18,8 @@ import type {
   LiveFloorArbiterOptions,
 } from "../src/live/queue.ts";
 import { DEFAULT_LIVE_CONFIG } from "../src/config.ts";
+import type { BrowserLiveAudio } from "../src/live/browser.ts";
+import type { LiveNativeBindings } from "../src/live/native.ts";
 import { LIVE_VISUALIZER_TOGGLE_KEY } from "../src/live/visualizer.ts";
 import { makeResolvedConfig } from "./helpers.ts";
 
@@ -35,15 +37,19 @@ function createRegistrationHarness() {
   const commands = new Map<string, CommandOptions>();
   const shortcuts = new Map<string, ShortcutOptions>();
   const events: string[] = [];
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   const renderers: string[] = [];
   const pi = {
     registerCommand: vi.fn((name: string, options: CommandOptions) => commands.set(name, options)),
     registerShortcut: vi.fn((key: string, options: ShortcutOptions) => shortcuts.set(key, options)),
     registerMessageRenderer: vi.fn((type: string) => renderers.push(type)),
-    on: vi.fn((event: string) => events.push(event)),
+    on: vi.fn((event: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+      events.push(event);
+      handlers.set(event, handler);
+    }),
     sendMessage: vi.fn(),
   } as unknown as ExtensionAPI;
-  return { pi, commands, shortcuts, events, renderers };
+  return { pi, commands, shortcuts, events, handlers, renderers };
 }
 
 function commandFrom(harness: ReturnType<typeof createRegistrationHarness>): CommandOptions {
@@ -335,5 +341,59 @@ describe("registerOpenAILive", () => {
     expect(notifyUnfocused.mock.calls[0]?.[1]).toBe("project · session-7");
 
     await run;
+  });
+
+  describe("browser audio start cleanup", () => {
+    function registerBrowserLive(startBrowserAudio: () => Promise<BrowserLiveAudio>) {
+      const harness = createRegistrationHarness();
+      registerOpenAILive(
+        harness.pi,
+        () =>
+          makeResolvedConfig({
+            live: { ...DEFAULT_LIVE_CONFIG, enabled: true, audio: "browser", browserPort: 18_795 },
+          }),
+        { startBrowserAudio, createArbiter: makeFakeArbiter().createArbiter },
+      );
+      return harness;
+    }
+    function fakeAudio(): BrowserLiveAudio & { close: Mock<() => Promise<void>> } {
+      return {
+        url: "http://localhost:18795/#token",
+        native: {} as LiveNativeBindings,
+        close: vi.fn(async () => undefined),
+      };
+    }
+
+    test("closes the server when the session shuts down during the start", async () => {
+      const audio = fakeAudio();
+      let bind: (() => void) | undefined;
+      const harness = registerBrowserLive(
+        () => new Promise((resolve) => (bind = () => resolve(audio))),
+      );
+      const custom = vi.fn();
+      const ctx = makeContext(custom);
+
+      const run = commandFrom(harness).handler("", ctx);
+      await vi.waitFor(() => expect(bind).toBeDefined());
+      await harness.handlers.get("session_shutdown")?.({}, ctx);
+      bind?.();
+      await run;
+
+      expect(audio.close).toHaveBeenCalledOnce();
+      expect(custom).not.toHaveBeenCalled();
+    });
+
+    test("closes the server when the live UI cannot open", async () => {
+      const audio = fakeAudio();
+      const harness = registerBrowserLive(async () => audio);
+      const ctx = makeContext(
+        vi.fn(async () => {
+          throw new Error("UI unavailable");
+        }),
+      );
+
+      await expect(commandFrom(harness).handler("", ctx)).rejects.toThrow("UI unavailable");
+      expect(audio.close).toHaveBeenCalledOnce();
+    });
   });
 });

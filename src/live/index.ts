@@ -63,6 +63,7 @@ export interface LiveRegistrationDependencies {
   probeFocusReporting?: typeof probeFocusReporting;
   attachFocusReporting?: typeof attachFocusReporting;
   notifyActivatedUnfocused?: (handle: FocusTerminalHandle, label: string) => void;
+  startBrowserAudio?: (port: number) => Promise<BrowserLiveAudio>;
   tickMs?: number;
 }
 
@@ -142,9 +143,13 @@ export function registerOpenAILive(
   const probeFocus = dependencies.probeFocusReporting ?? probeFocusReporting;
   const attachFocus = dependencies.attachFocusReporting ?? attachFocusReporting;
   const notifyUnfocused = dependencies.notifyActivatedUnfocused ?? notifyActivatedUnfocused;
+  const startBrowserAudio =
+    dependencies.startBrowserAudio ??
+    ((port: number) => startBrowserLiveAudio({ port, token: readOrCreateBrowserToken() }));
   const tickMs = dependencies.tickMs ?? LIVE_QUEUE_TICK_MS;
   let activeRun: ActiveLiveRun | undefined;
   let settling: Promise<void> | undefined;
+  let shutdowns = 0;
 
   async function stopActive(): Promise<void> {
     const run = activeRun;
@@ -168,19 +173,22 @@ export function registerOpenAILive(
     }
     if (settling) await settling;
 
+    const shutdownsAtStart = shutdowns;
     let route: LiveProviderRoute | undefined;
     let browserAudio: BrowserLiveAudio | undefined;
     try {
       if (cfg.live.provider) route = resolveLiveProviderRoute(ctx, cfg.live.provider);
       if (cfg.live.audio === "browser") {
-        browserAudio = await startBrowserLiveAudio({
-          port: cfg.live.browserPort,
-          token: readOrCreateBrowserToken(),
-        });
+        browserAudio = await startBrowserAudio(cfg.live.browserPort);
       }
     } catch (cause) {
       const message = errorFrom(cause).message;
       ctx.ui.notify(sanitizeDiagnosticError(`Live voice could not start: ${message}`), "error");
+      return;
+    }
+    // The server binds before any run exists, so session_shutdown cannot reach it yet.
+    if (shutdowns !== shutdownsAtStart) {
+      await browserAudio?.close().catch(() => undefined);
       return;
     }
     if (browserAudio) {
@@ -190,7 +198,8 @@ export function registerOpenAILive(
       );
     }
 
-    const result = await ctx.ui.custom<LiveUiResult>((tui, theme, _keybindings, done) => {
+    let ownRun = undefined as ActiveLiveRun | undefined;
+    const ui = ctx.ui.custom<LiveUiResult>((tui, theme, _keybindings, done) => {
       let completed = false;
       let disposed = false;
       let session: LiveSessionRuntime | undefined;
@@ -287,6 +296,7 @@ export function registerOpenAILive(
         dispose,
       };
       activeRun = run;
+      ownRun = run;
 
       setImmediate(() => {
         void (async () => {
@@ -346,14 +356,19 @@ export function registerOpenAILive(
       return visualizer;
     });
 
-    const run = activeRun;
-    if (run) {
+    // Runs even if the UI rejects. dispose() is idempotent and closes the browser server.
+    const result = await ui.finally(async () => {
+      const run = ownRun;
+      if (!run) {
+        await browserAudio?.close().catch(() => undefined);
+        return;
+      }
       const cleanup = run.dispose().catch(() => undefined);
       settling = cleanup;
       await cleanup;
       if (activeRun === run) activeRun = undefined;
       if (settling === cleanup) settling = undefined;
-    }
+    });
     if (result.error) ctx.ui.notify(sanitizeDiagnosticError(result.error.message), "error");
   }
 
@@ -396,6 +411,7 @@ export function registerOpenAILive(
   });
 
   pi.on("session_shutdown", async () => {
+    shutdowns += 1;
     await stopActive();
     activeRun = undefined;
   });
