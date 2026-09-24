@@ -115,6 +115,7 @@ function createImageHarness(
     }),
     registerCommand: vi.fn(),
     registerMessageRenderer: vi.fn(),
+    registerEntryRenderer: vi.fn(),
   } as unknown as ExtensionAPI;
   const ctx = {
     cwd,

@@ -62,8 +62,8 @@ describe("live status on the editor border", () => {
       expect(bottom.slice(0, width - segmentWidth - 1)).toBe("─".repeat(width - segmentWidth - 1));
       expect(bottom).toMatch(/ ─$/);
       // One speaker at a time: the newest speaker only.
-      expect(bottom).toContain("live › ");
-      expect(bottom).not.toContain("you › ");
+      expect(bottom).toContain("agent: ");
+      expect(bottom).not.toContain("you: ");
     } finally {
       visualizer.dispose();
     }
@@ -113,7 +113,7 @@ describe("live status on the editor border", () => {
       });
       const segment = visualizer.renderSegment(40);
       expect(visibleWidth(segment)).toBe(40);
-      expect(segment.endsWith("live › …st words stay visible ")).toBe(true);
+      expect(segment.endsWith("agent: …st words stay visible ")).toBe(true);
       expect(segment).not.toContain("first words");
     } finally {
       visualizer.dispose();
@@ -126,24 +126,24 @@ describe("live status on the editor border", () => {
       visualizer.setPhase("listening");
       visualizer.setTranscript({ role: "user", text: "check the build", turn: 1, final: false });
       let segment = visualizer.renderSegment(40);
-      expect(segment).toContain("you › check the build");
-      expect(segment).not.toContain("live ›");
+      expect(segment).toContain("you: check the build");
+      expect(segment).not.toContain("agent:");
 
       visualizer.setPhase("speaking");
       visualizer.setTranscript({ role: "assistant", text: "it is green", turn: 1, final: false });
       segment = visualizer.renderSegment(40);
-      expect(segment).toContain("live › it is green");
-      expect(segment).not.toContain("you ›");
+      expect(segment).toContain("agent: it is green");
+      expect(segment).not.toContain("you:");
 
       // A late final user transcript does not replace the voice's words while it speaks.
       visualizer.setTranscript({ role: "user", text: "check the build?", turn: 1, final: true });
-      expect(visualizer.renderSegment(40)).toContain("live › it is green");
+      expect(visualizer.renderSegment(40)).toContain("agent: it is green");
 
       visualizer.setPhase("listening");
       visualizer.setTranscript({ role: "user", text: "thanks", turn: 2, final: false });
       segment = visualizer.renderSegment(40);
-      expect(segment).toContain("you › thanks");
-      expect(segment).not.toContain("live ›");
+      expect(segment).toContain("you: thanks");
+      expect(segment).not.toContain("agent:");
     } finally {
       visualizer.dispose();
     }
@@ -164,7 +164,7 @@ describe("live status on the editor border", () => {
       for (let width = 3; width <= 60; width += 1) {
         expect(visibleWidth(visualizer.renderSegment(width))).toBe(width);
       }
-      expect(visualizer.renderSegment(24)).toContain("live › ");
+      expect(visualizer.renderSegment(24)).toContain("agent: ");
       expect(visualizer.renderSegment(20)).toContain("speaking");
       expect(visualizer.renderSegment(20)).not.toContain("›");
       expect(visualizer.renderSegment(12)).toContain("»");
@@ -180,7 +180,7 @@ describe("live status on the editor border", () => {
       visualizer.setPhase("muted");
       expect(visualizer.renderSegment(40)).toContain("× muted · space mute · esc end");
       visualizer.setTranscript({ role: "user", text: "hi", turn: 1, final: true });
-      expect(visualizer.renderSegment(40)).toContain("× you › hi");
+      expect(visualizer.renderSegment(40)).toContain("× you: hi");
       visualizer.setTranscript(undefined);
       expect(visualizer.renderSegment(40)).toContain("space mute");
     } finally {
@@ -195,7 +195,7 @@ describe("live status on the editor border", () => {
       const line = embedInBorder(scrolled, 80, (max) => visualizer.renderSegment(max), plainBorder);
       expect(line.startsWith(`${"─".repeat(10)} ↓ 3 more ─`)).toBe(true);
       expect(visibleWidth(line)).toBe(80);
-      expect(line).toContain("live › ");
+      expect(line).toContain("agent: ");
       const crowded = `── ${"x".repeat(74)} ──`;
       expect(embedInBorder(crowded, 80, (max) => visualizer.renderSegment(max), plainBorder)).toBe(
         crowded,
@@ -220,7 +220,7 @@ describe("live status on the editor border", () => {
       const lines = editor.render(80);
       expect(lines).toHaveLength(rows.length);
       expect(lines[2]).not.toBe(rows[2]);
-      expect(lines[2]).toContain("live › ");
+      expect(lines[2]).toContain("agent: ");
       expect([lines[0], lines[1], lines[3], lines[4]]).toEqual([
         rows[0],
         rows[1],
@@ -257,7 +257,7 @@ describe("live status on the editor border", () => {
         final: false,
       });
       const rendered = visualizer.renderSegment(80);
-      expect(rendered).toContain("live › hello there");
+      expect(rendered).toContain("agent: hello there");
       expect(rendered).not.toContain("\u001b[31m");
     } finally {
       visualizer.dispose();
@@ -297,5 +297,28 @@ describe("live status on the editor border", () => {
     requestRender.mockClear();
     vi.advanceTimersByTime(1_000);
     expect(requestRender).not.toHaveBeenCalled();
+  });
+});
+
+describe("live status: speaker switch and levels", () => {
+  test("switches to 'you: …' as soon as the user is audibly speaking", () => {
+    const visualizer = new LiveVisualizer({ theme, requestRender: vi.fn() });
+    try {
+      visualizer.setPhase("listening");
+      visualizer.setTranscript({ role: "assistant", text: "what's next?", turn: 1, final: true });
+      expect(visualizer.renderSegment(40)).toContain("agent: what's next?");
+      visualizer.setLevels(0.2, 0); // one sample is not enough (no flicker)
+      expect(visualizer.renderSegment(40)).toContain("agent: ");
+      visualizer.setLevels(0.2, 0);
+      expect(visualizer.renderSegment(40)).toContain("you: …");
+      visualizer.setTranscript({ role: "user", text: "run the tests", turn: 2, final: false });
+      expect(visualizer.renderSegment(40)).toContain("you: run the tests");
+      // Room noise does not switch it.
+      visualizer.setLevels(0.01, 0);
+      visualizer.setLevels(0.01, 0);
+      expect(visualizer.renderSegment(40)).toContain("you: run the tests");
+    } finally {
+      visualizer.dispose();
+    }
   });
 });

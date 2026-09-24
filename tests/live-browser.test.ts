@@ -60,7 +60,16 @@ function runPageScript(options: { devices?: FakeDevice[]; saved?: Record<string,
   const elements = new Map<string, Record<string, unknown>>();
   const element = (id: string) => {
     if (!elements.has(id)) {
-      const created: Record<string, unknown> = { textContent: "", hidden: true, value: 0 };
+      const created: Record<string, unknown> = {
+        textContent: "",
+        hidden: true,
+        value: 0,
+        dataset: {},
+        attributes: {},
+      };
+      created.setAttribute = (name: string, value: string) => {
+        (created.attributes as Record<string, string>)[name] = value;
+      };
       created.replaceChildren = (...children: Array<{ value: string; textContent: string }>) => {
         created.options = children;
       };
@@ -203,7 +212,11 @@ function runPageScript(options: { devices?: FakeDevice[]; saved?: Record<string,
       element(`${kind}-device`).value = value;
       (element(`${kind}-device`).onchange as () => void)();
     },
-    enable: () => (element("enable").onclick as () => Promise<void>)(),
+    enable: () => (element("voice").onclick as () => Promise<void>)(),
+    voice: () => element("voice"),
+    mute: () => element("mute"),
+    detail: () => element("detail").textContent,
+    error: () => element("error").textContent,
     openSocket: () => socket?.onopen?.(),
     dropSocket: (code: number) => socket?.onclose?.({ code }),
     connections,
@@ -580,5 +593,30 @@ describe("browser live audio", () => {
     expect(page.status()).toBe("Muted in pi.");
     page.receive({ type: "mute", muted: false });
     expect(page.status()).toBe("Live. Speak to pi.");
+  });
+
+  test("the voice and mute buttons control the call like GipPity's page", async () => {
+    const page = runPageScript();
+    page.openSocket();
+    expect(page.voice().textContent).toBe("Tap to enable voice");
+    await page.enable();
+    page.receive({ type: "offer.request" });
+    await vi.waitFor(() =>
+      expect(page.sent.some((message) => message.type === "offer")).toBe(true),
+    );
+    expect(page.voice().dataset).toEqual({ state: "connecting" });
+    page.openChannel();
+    expect(page.voice().textContent).toBe("Tap to stop");
+    expect(page.mute().hidden).toBe(false);
+    expect(page.detail()).toBe("Listening");
+
+    (page.mute().onclick as () => void)();
+    expect(page.sent.at(-1)).toEqual({ type: "control", action: "mute" });
+    page.receive({ type: "mute", muted: true });
+    expect(page.mute().textContent).toBe("Unmute mic");
+    expect(page.detail()).toBe("Microphone muted");
+
+    await (page.voice().onclick as () => Promise<void>)();
+    expect(page.sent.at(-1)).toEqual({ type: "control", action: "stop" });
   });
 });
