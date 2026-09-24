@@ -1,7 +1,6 @@
 import {
   DEFAULT_FOOTER_CONFIG,
   DEFAULT_IMAGE_CONFIG,
-  DEFAULT_LIVE_CONFIG,
   DEFAULT_PET_CONFIG,
   DEFAULT_USAGE_CONFIG,
   DEFAULT_WEBSEARCH_CONFIG,
@@ -24,7 +23,6 @@ export function makeResolvedConfig(overrides: Partial<ResolvedConfig> = {}): Res
     footer: DEFAULT_FOOTER_CONFIG,
     image: DEFAULT_IMAGE_CONFIG,
     websearch: DEFAULT_WEBSEARCH_CONFIG,
-    live: DEFAULT_LIVE_CONFIG,
     pets: DEFAULT_PET_CONFIG,
     ...overrides,
   };

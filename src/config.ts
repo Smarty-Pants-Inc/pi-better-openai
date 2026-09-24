@@ -2,12 +2,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { CONFIG_BASENAME, logPrefix } from "./identity.ts";
-import {
-  DEFAULT_LIVE_VOICE,
-  isLiveVoice,
-  LIVE_VOICE_VALUES,
-  type LiveVoice,
-} from "./live/voices.ts";
 import { piAgentDir } from "./paths.ts";
 
 export const FOOTER_MODES = ["replace", "status", "off"] as const;
@@ -110,22 +104,6 @@ export type WebsearchConfig = {
   provider?: string;
 };
 
-export const LIVE_AUDIO_MODES = ["local", "browser"] as const;
-export type LiveAudioMode = (typeof LIVE_AUDIO_MODES)[number];
-
-export type LiveConfig = {
-  enabled?: boolean;
-  voice?: LiveVoice;
-  /** pi provider whose base URL and API key route live traffic, e.g. a CLIProxyAPI gateway. */
-  provider?: string;
-  /** `browser` serves a loopback page that owns the microphone and speaker. */
-  audio?: LiveAudioMode;
-  browserPort?: number;
-  /** Browser audio: preferred microphone and speaker labels, e.g. "Yealink BT51". */
-  inputDevice?: string;
-  outputDevice?: string;
-};
-
 export type PetConfig = {
   enabled?: boolean;
   slug?: string;
@@ -149,7 +127,6 @@ export interface ConfigFile {
   footer?: FooterConfig;
   image?: ImageConfig;
   websearch?: WebsearchConfig;
-  live?: LiveConfig;
   pets?: PetConfig;
 }
 
@@ -173,7 +150,6 @@ export interface ResolvedConfig {
   footer: Required<FooterConfig>;
   image: Required<ImageConfig>;
   websearch: Required<WebsearchConfig>;
-  live: Required<LiveConfig>;
   pets: Required<PetConfig>;
 }
 
@@ -214,16 +190,6 @@ export const DEFAULT_WEBSEARCH_CONFIG: Required<WebsearchConfig> = {
   provider: "",
 };
 
-export const DEFAULT_LIVE_CONFIG: Required<LiveConfig> = {
-  enabled: true,
-  voice: DEFAULT_LIVE_VOICE,
-  provider: "",
-  audio: "local",
-  browserPort: 8795,
-  inputDevice: "",
-  outputDevice: "",
-};
-
 export const DEFAULT_PET_CONFIG: Required<PetConfig> = {
   enabled: false,
   slug: "",
@@ -248,18 +214,10 @@ export const DEFAULT_CONFIG: ConfigFile = {
   footer: DEFAULT_FOOTER_CONFIG,
   image: DEFAULT_IMAGE_CONFIG,
   websearch: DEFAULT_WEBSEARCH_CONFIG,
-  live: DEFAULT_LIVE_CONFIG,
   pets: DEFAULT_PET_CONFIG,
 };
 
-export type SettingsOptionSection =
-  | "root"
-  | "usage"
-  | "footer"
-  | "image"
-  | "websearch"
-  | "live"
-  | "pets";
+export type SettingsOptionSection = "root" | "usage" | "footer" | "image" | "websearch" | "pets";
 
 export type SettingsValueContext = {
   petEmptyValue?: string;
@@ -497,39 +455,6 @@ export const WEBSEARCH_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] 
   },
 ];
 
-export const LIVE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
-  {
-    id: "live.enabled",
-    section: "live",
-    key: "enabled",
-    label: "Live voice",
-    currentValue: (cfg) => String(cfg.live.enabled),
-    values: ["true", "false"],
-    description: "Allow /live to start a Codex-backed realtime voice session.",
-    parse: booleanSetting,
-  },
-  {
-    id: "live.voice",
-    section: "live",
-    key: "voice",
-    label: "Voice",
-    currentValue: (cfg) => cfg.live.voice,
-    values: LIVE_VOICE_VALUES,
-    description: "Voice used for realtime spoken responses.",
-    parse: stringSetting,
-  },
-  {
-    id: "live.audio",
-    section: "live",
-    key: "audio",
-    label: "Live audio",
-    currentValue: (cfg) => cfg.live.audio,
-    values: LIVE_AUDIO_MODES,
-    description: "Use this machine's audio devices, or a browser page for remote sessions.",
-    parse: stringSetting,
-  },
-];
-
 export const PET_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   {
     id: "pets.enabled",
@@ -640,7 +565,6 @@ export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = 
   ...USAGE_SETTING_DESCRIPTORS,
   ...IMAGE_SETTING_DESCRIPTORS,
   ...WEBSEARCH_SETTING_DESCRIPTORS,
-  ...LIVE_SETTING_DESCRIPTORS,
   ...PET_SETTING_DESCRIPTORS,
 ];
 
@@ -784,22 +708,6 @@ export function readConfig(path: string): ConfigFile | undefined {
       config.websearch.timeoutMs = parsed.websearch.timeoutMs;
     if (typeof parsed.websearch.provider === "string")
       config.websearch.provider = parsed.websearch.provider.trim();
-  }
-  if (isRecord(parsed.live)) {
-    config.live = {};
-    if (typeof parsed.live.enabled === "boolean") config.live.enabled = parsed.live.enabled;
-    if (isLiveVoice(parsed.live.voice)) config.live.voice = parsed.live.voice;
-    if (typeof parsed.live.provider === "string")
-      config.live.provider = parsed.live.provider.trim();
-    if ((LIVE_AUDIO_MODES as readonly unknown[]).includes(parsed.live.audio))
-      config.live.audio = parsed.live.audio as LiveAudioMode;
-    const port = parsed.live.browserPort;
-    if (typeof port === "number" && Number.isInteger(port) && port >= 1024 && port <= 65_535)
-      config.live.browserPort = port;
-    for (const key of ["inputDevice", "outputDevice"] as const) {
-      const device = parsed.live[key];
-      if (typeof device === "string") config.live[key] = device.trim();
-    }
   }
   if (isRecord(parsed.pets)) {
     config.pets = {};
@@ -970,11 +878,6 @@ export function resolveConfig(cwd: string): ResolvedConfig {
             DEFAULT_WEBSEARCH_CONFIG.timeoutMs,
         ),
       ),
-    },
-    live: {
-      ...DEFAULT_LIVE_CONFIG,
-      ...globalConfig.live,
-      ...projectConfig.live,
     },
     pets: {
       ...DEFAULT_PET_CONFIG,

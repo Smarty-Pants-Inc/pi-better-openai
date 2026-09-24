@@ -12,7 +12,7 @@ import {
   type CodexCredentialsWithSource,
 } from "./codex-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
-import { resolveLiveProviderRoute } from "./live/index.ts";
+import { resolveProviderRoute } from "./provider-route.ts";
 
 export const OPENAI_WEBSEARCH_TOOL = "openai_websearch";
 export const OPENAI_WEBSEARCH_COMMAND = "openai-websearch";
@@ -96,7 +96,7 @@ type SearchRoute = {
 
 /**
  * With websearch.provider set, search goes through that pi provider (for example a
- * CLIProxyAPI gateway) with its base URL and API key, resolved the same way /live does.
+ * CLIProxyAPI gateway) with its base URL and API key, resolved by resolveProviderRoute.
  * The gateway owns ChatGPT OAuth and account selection. Unset keeps openai-codex OAuth.
  */
 async function resolveSearchRoute(
@@ -113,9 +113,9 @@ async function resolveSearchRoute(
       "Missing openai-codex OAuth credentials. Run /login openai-codex, or set websearch.provider.",
     );
   }
-  let route: ReturnType<typeof resolveLiveProviderRoute>;
+  let route: ReturnType<typeof resolveProviderRoute>;
   try {
-    route = resolveLiveProviderRoute(ctx, provider);
+    route = resolveProviderRoute(ctx, provider);
   } catch {
     throw new WebSearchError(
       "authentication_required",
