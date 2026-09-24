@@ -65,12 +65,21 @@ function truncateFromStart(text: string, width: number): string {
   return `…${sliceByColumn(text, textWidth - width + 1, width - 1, true)}`;
 }
 
-type TranscriptSide = { role: LiveTranscript["role"]; text: string };
+type TranscriptSide = { role: LiveTranscript["role"]; text: string; final?: boolean };
 
 const TRANSCRIPT_LABELS: Record<LiveTranscript["role"], string> = {
-  user: "you › ",
-  assistant: "live › ",
+  user: "you: ",
+  assistant: "agent: ",
 };
+
+/** Each side's color (theme tokens, so it follows /theme): label, meter, and text. */
+export const SIDE_COLORS: Record<LiveTranscript["role"], ThemeColor> = {
+  user: "accent",
+  assistant: "borderAccent",
+};
+
+/** Microphone RMS that counts as the user speaking (the barge-in level). */
+const USER_SPEECH_LEVEL = 0.04;
 
 const STATIC_ICONS: Record<LivePhase, string> = {
   standby: "◌",
@@ -104,6 +113,7 @@ export class LiveVisualizer {
   #phase: LivePhase = "connecting";
   #inputLevel = 0;
   #displayLevel = 0;
+  #loudSamples = 0;
   #frame = 0;
   /** Latest text per side, oldest first; the last entry is the most recent speaker. */
   #transcripts: TranscriptSide[] = [];
@@ -130,6 +140,27 @@ export class LiveVisualizer {
     this.#options.requestRender();
   }
 
+  /**
+   * Live levels: the meter shows the louder of the microphone and the voice. Two samples of
+   * audible user speech put "you: …" on the status at once, before any transcript arrives.
+   */
+  setLevels(input: number, output: number): void {
+    const microphone = Number.isFinite(input) ? input : 0;
+    const speaking =
+      microphone >= USER_SPEECH_LEVEL && microphone >= (Number.isFinite(output) ? output : 0);
+    this.#loudSamples = speaking ? this.#loudSamples + 1 : 0;
+    if (this.#loudSamples === 2 && this.#phase !== "speaking") this.#userStartedSpeaking();
+    this.setInputLevel(Math.max(microphone, Number.isFinite(output) ? output : 0));
+  }
+
+  #userStartedSpeaking(): void {
+    const user = this.#transcripts.find((side) => side.role === "user");
+    if (this.#transcripts.at(-1)?.role === "user" && user && !user.final) return;
+    const others = this.#transcripts.filter((side) => side.role !== "user");
+    this.#transcripts = [...others, { role: "user", text: "" }];
+    this.#options.requestRender();
+  }
+
   setInputLevel(level: number): void {
     const next = Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 0;
     if (this.#inputLevel === next) return;
@@ -148,9 +179,16 @@ export class LiveVisualizer {
     }
     const text = sanitizeTranscript(transcript.text);
     const latest = this.#transcripts.at(-1);
-    if (latest?.role === transcript.role && latest.text === text) return;
+    if (
+      latest?.role === transcript.role &&
+      latest.text === text &&
+      latest.final === transcript.final
+    )
+      return;
     const others = this.#transcripts.filter((side) => side.role !== transcript.role);
-    this.#transcripts = text ? [...others, { role: transcript.role, text }] : others;
+    this.#transcripts = text
+      ? [...others, { role: transcript.role, text, final: transcript.final }]
+      : others;
     this.#options.requestRender();
   }
 
@@ -171,20 +209,20 @@ export class LiveVisualizer {
     const theme = this.#options.theme;
     const inner = width - 2;
     const icon = this.#renderIcon();
-    const wave = this.#renderWave();
+    const current = this.#currentTranscript();
+    const wave = this.#renderWave(current ? SIDE_COLORS[current.role] : undefined);
     const head = `${wave} ${icon}`;
     const headWidth = WAVE_WIDTH + 2;
     const phase = `${head} ${theme.fg(PHASE_COLORS[this.#phase], this.#phase)}`;
     const phaseWidth = headWidth + 1 + visibleWidth(this.#phase);
 
     let content = icon;
-    const current = this.#currentTranscript();
     const label = current ? TRANSCRIPT_LABELS[current.role] : "";
     const textColumns = inner - headWidth - 1 - visibleWidth(label);
     if (current && textColumns >= MIN_TRANSCRIPT_COLUMNS) {
-      const color: ThemeColor = current.role === "assistant" ? "borderAccent" : "accent";
-      const text = theme.fg(color, truncateFromStart(current.text, textColumns));
-      content = `${head} ${theme.fg("dim", label)}${text}`;
+      const color = SIDE_COLORS[current.role];
+      const text = theme.fg(color, truncateFromStart(current.text || "…", textColumns));
+      content = `${head} ${theme.fg(color, label)}${text}`;
     } else if (!current && inner >= phaseWidth + SEPARATOR.length + HINTS.length) {
       content = `${phase}${theme.fg("dim", SEPARATOR)}${theme.fg("dim", HINTS)}`;
     } else if (inner >= phaseWidth) content = phase;
@@ -212,7 +250,7 @@ export class LiveVisualizer {
     );
   }
 
-  #renderWave(): string {
+  #renderWave(sideColor?: ThemeColor): string {
     const microphoneEnergy = Math.min(1, Math.sqrt(this.#displayLevel * 5));
     const connectingEnergy =
       this.#phase === "connecting" ? 0.06 + 0.03 * Math.sin(this.#frame * 0.35) : 0;
@@ -228,7 +266,11 @@ export class LiveVisualizer {
       wave += WAVE_BLOCKS[Math.max(1, Math.min(maxHeight, height))];
     }
     const color: ThemeColor =
-      quiet || this.#phase === "connecting" ? "dim" : this.#phase === "error" ? "error" : "success";
+      quiet || this.#phase === "connecting"
+        ? "dim"
+        : this.#phase === "error"
+          ? "error"
+          : (sideColor ?? "success");
     return this.#options.theme.fg(color, wave);
   }
 }

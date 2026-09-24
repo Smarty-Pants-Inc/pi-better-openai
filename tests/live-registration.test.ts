@@ -13,7 +13,9 @@ import {
   LIVE_COMMAND,
   LIVE_FOCUS_SETTLE_MS,
   LIVE_DELEGATION_MESSAGE_TYPE,
+  LIVE_TURN_ENTRY_TYPE,
   registerOpenAILive,
+  renderLiveTurn,
 } from "../src/live/index.ts";
 import type { LiveSessionControllerOptions } from "../src/live/controller.ts";
 import {
@@ -48,6 +50,8 @@ function createRegistrationHarness() {
     registerCommand: vi.fn((name: string, options: CommandOptions) => commands.set(name, options)),
     registerShortcut: vi.fn((key: string, options: ShortcutOptions) => shortcuts.set(key, options)),
     registerMessageRenderer: vi.fn((type: string) => renderers.push(type)),
+    registerEntryRenderer: vi.fn((type: string) => renderers.push(type)),
+    appendEntry: vi.fn(),
     on: vi.fn((event: string, handler: (event: unknown, ctx: unknown) => unknown) => {
       events.push(event);
       handlers.set(event, handler);
@@ -351,6 +355,64 @@ describe("registerOpenAILive", () => {
     await vi.waitFor(() => expect(live.isActive()).toBe(false));
     expect(sessions).toHaveLength(1);
     expect(arbiter.arbiter.leave).toHaveBeenCalledOnce();
+  });
+
+  test("logs each final voice turn once as a display-only entry", async () => {
+    const harness = createRegistrationHarness();
+    const sessions: Array<ReturnType<typeof makeSessionStub>> = [];
+    const arbiter = makeFakeArbiter();
+    const live = registerOpenAILive(
+      harness.pi,
+      () => makeResolvedConfig({ live: { ...DEFAULT_LIVE_CONFIG, enabled: true } }),
+      {
+        createSession: (options) => {
+          const stub = makeSessionStub(options, false);
+          sessions.push(stub);
+          return stub;
+        },
+        createArbiter: arbiter.createArbiter,
+        probeFocusReporting: vi.fn(async () => false),
+        tickMs: 60_000,
+      },
+    );
+    const { ui } = makeFakeUi();
+    await commandFrom(harness).handler("", makeContext(ui));
+    await vi.waitFor(() => requireCallbacks(arbiter));
+    requireCallbacks(arbiter).onActivated("fifo");
+    await vi.waitFor(() => expect(sessions[0]?.start).toHaveBeenCalledOnce());
+    const { onTranscript } = sessions[0]!.options.callbacks;
+    onTranscript({ role: "user", text: "check the", turn: 1, final: false });
+    onTranscript({ role: "user", text: "check the build", turn: 1, final: true });
+    onTranscript({ role: "user", text: "check the build", turn: 1, final: true });
+    onTranscript({ role: "assistant", text: "It is green.", turn: 1, final: true });
+    onTranscript(undefined);
+    expect(harness.pi.appendEntry).toHaveBeenCalledTimes(2);
+    expect(harness.pi.appendEntry).toHaveBeenNthCalledWith(1, LIVE_TURN_ENTRY_TYPE, {
+      role: "user",
+      text: "check the build",
+    });
+    expect(harness.pi.appendEntry).toHaveBeenNthCalledWith(2, LIVE_TURN_ENTRY_TYPE, {
+      role: "assistant",
+      text: "It is green.",
+    });
+    // Display-only: nothing is sent to the model.
+    expect(harness.pi.sendMessage).not.toHaveBeenCalled();
+    expect(harness.renderers).toContain(LIVE_TURN_ENTRY_TYPE);
+    await live.stop();
+  });
+
+  test("renders a logged turn as GipPity did", () => {
+    const theme = {
+      fg: (color: string, text: string) => `<${color}>${text}`,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    };
+    const you = renderLiveTurn({ role: "user", text: "check the build" }, theme as never);
+    const youText = you.render(60).join("\n");
+    expect(youText).toContain("<customMessageLabel>You said");
+    expect(youText).toContain("<customMessageText>check the build");
+    const agent = renderLiveTurn({ role: "assistant", text: "It is green." }, theme as never);
+    expect(agent.render(60).join("\n")).toContain("<customMessageLabel>Realtime Voice");
   });
 
   test("wraps another extension's editor and restores its factory and history on stop", async () => {

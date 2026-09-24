@@ -172,6 +172,7 @@ async function createResetsHarness(config: Record<string, unknown> = {}): Promis
     }),
     registerTool: vi.fn(),
     registerMessageRenderer: vi.fn(),
+    registerEntryRenderer: vi.fn(),
     registerShortcut: vi.fn(),
     sendMessage: vi.fn(),
     getFlag: vi.fn(() => false),

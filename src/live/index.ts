@@ -3,7 +3,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { type Component, Text, type TUI } from "@earendil-works/pi-tui";
+import { Box, type Component, Text, type TUI } from "@earendil-works/pi-tui";
 import { type CodexCredentials, getCodexCredentials } from "../codex-auth.ts";
 import type { ResolvedConfig } from "../config.ts";
 import { sanitizeDiagnosticError } from "../format.ts";
@@ -36,6 +36,13 @@ import {
 
 export const LIVE_COMMAND = "live";
 export const LIVE_DELEGATION_MESSAGE_TYPE = "better-openai-live-delegation";
+/** Display-only log of the voice conversation; appendEntry keeps it out of model context. */
+export const LIVE_TURN_ENTRY_TYPE = "better-openai-live-turn";
+
+interface LiveTurnEntry {
+  role: LiveTranscript["role"];
+  text: string;
+}
 export const LIVE_FOCUS_SETTLE_MS = 400;
 
 interface LiveSessionRuntime {
@@ -297,6 +304,16 @@ export function registerOpenAILive(
       const activateSession = () => {
         if (completed || session) return;
         sessionParked = false;
+        // Each final voice-conversation turn is logged once in the Pi pane.
+        const loggedTurns = new Set<string>();
+        const logTurn = (transcript: LiveTranscript | undefined) => {
+          const text = transcript?.final ? transcript.text.trim() : "";
+          if (!transcript || !text) return;
+          const key = `${transcript.role}:${transcript.turn}`;
+          if (loggedTurns.has(key)) return;
+          loggedTurns.add(key);
+          pi.appendEntry<LiveTurnEntry>(LIVE_TURN_ENTRY_TYPE, { role: transcript.role, text });
+        };
         const created = createSession({
           sessionId: ctx.sessionManager.getSessionId(),
           voice: cfg.live.voice,
@@ -316,9 +333,11 @@ export function registerOpenAILive(
           },
           callbacks: {
             onPhase: (phase) => visualizer.setPhase(phase),
-            onLevels: (input) => visualizer.setInputLevel(input),
-            onTranscript: (transcript: LiveTranscript | undefined) =>
-              visualizer.setTranscript(transcript),
+            onLevels: (input, output) => visualizer.setLevels(input, output),
+            onTranscript: (transcript: LiveTranscript | undefined) => {
+              visualizer.setTranscript(transcript);
+              logTurn(transcript);
+            },
             onTerminal: (error) => {
               if (sessionParked) return;
               finishUi(error ? { error } : {});
@@ -500,6 +519,10 @@ export function registerOpenAILive(
     return new Text(`${label}\n${theme.fg("customMessageText", text)}`, 1, 0);
   });
 
+  pi.registerEntryRenderer<LiveTurnEntry>(LIVE_TURN_ENTRY_TYPE, (entry, _options, theme) =>
+    renderLiveTurn(entry.data, theme),
+  );
+
   pi.registerCommand(LIVE_COMMAND, {
     description: "Start or stop Codex-backed realtime voice mode",
     handler: async (args, ctx) => {
@@ -540,4 +563,25 @@ export function registerOpenAILive(
     isActive: () => activeRun !== undefined || settling !== undefined,
     stop: stopActive,
   };
+}
+
+/**
+ * One voice turn inline in the Pi pane, rendered as GipPity rendered its
+ * gippity-realtime-user-transcript and gippity-realtime-voice entries (its voiceBox).
+ */
+export function renderLiveTurn(
+  entry: LiveTurnEntry | undefined,
+  theme: {
+    fg(color: "customMessageLabel" | "customMessageText", text: string): string;
+    bg(color: "customMessageBg", text: string): string;
+    bold(text: string): string;
+  },
+): Box {
+  const user = entry?.role !== "assistant";
+  const text = typeof entry?.text === "string" ? entry.text : "Voice transcript unavailable.";
+  const label = theme.bold(theme.fg("customMessageLabel", user ? "You said" : "Realtime Voice"));
+  const body = theme.fg("customMessageText", text);
+  const box = new Box(1, 1, (line) => theme.bg("customMessageBg", line));
+  box.addChild(new Text(`${label}\n${body}`, 0, 0));
+  return box;
 }
