@@ -53,7 +53,7 @@ const token = decodeURIComponent(location.hash.slice(1));
 const $ = (id) => document.getElementById(id);
 const audio = new Audio();
 audio.autoplay = true;
-let ws, pc, stream, remote, context, stopMeter, retry = 0, unlocked = false, live = false;
+let ws, pc, stream, remote, context, stopMeter, retry = 0, unlocked = false, live = false, waitingForPi = false;
 let unlockWaiters = [];
 
 const MIC = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
@@ -297,7 +297,7 @@ async function handle(message) {
 function connect() {
   $("reconnect").hidden = true;
   ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
-  ws.onopen = () => { retry = 0; send({ type: "hello", token, live }); status(live ? callText() : idleText()); };
+  ws.onopen = () => { retry = 0; waitingForPi = false; send({ type: "hello", token, live }); status(live ? callText() : idleText()); };
   ws.onmessage = (event) => { handle(JSON.parse(event.data)).catch(fail); };
   ws.onclose = (event) => {
     // A dropped socket (for example a Herdr or SSH tunnel restart) keeps an open call: its media
@@ -311,8 +311,16 @@ function connect() {
     hangup();
     if (event.code === 4001) { status("pi rejected this page. Open the URL that pi printed."); return; }
     if (event.code === 4000) { status("Another tab took over pi live audio."); $("reconnect").hidden = false; return; }
+    // Pi ended the call: keep this page and reconnect when /live starts again, so calls reuse
+    // one tab. Pi prints the page link only when no page reconnects.
+    if (event.code === 4002) waitingForPi = true;
+    if (waitingForPi) {
+      status("Call ended; waiting for pi");
+      setTimeout(connect, retry++ < 30 ? 2000 : 5000);
+      return;
+    }
     // Bounded retries: each refused attempt can print an SSH forwarding error on the client.
-    if (event.code === 4002 || retry >= 6) {
+    if (retry >= 6) {
       status("pi live voice is off. Run /live in pi, then click Reconnect.");
       $("reconnect").hidden = false;
       return;

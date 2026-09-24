@@ -322,3 +322,54 @@ describe("live status: speaker switch and levels", () => {
     }
   });
 });
+
+describe("live status render cadence", () => {
+  test("coalesces updates into at most one render per frame", () => {
+    vi.useFakeTimers();
+    const requestRender = vi.fn();
+    const visualizer = new LiveVisualizer({ theme, requestRender });
+    try {
+      visualizer.setPhase("listening");
+      requestRender.mockClear();
+      for (let i = 0; i < 20; i++) {
+        visualizer.setLevels(i / 40, 0);
+        visualizer.setTranscript({ role: "user", text: `word ${i}`, turn: 1, final: false });
+      }
+      expect(requestRender).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(100);
+      expect(requestRender).toHaveBeenCalledTimes(1);
+    } finally {
+      visualizer.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  test("renders less often while the event loop is busy, and recovers", () => {
+    vi.useFakeTimers();
+    let clock = 0;
+    let lag = 150; // each frame arrives 150 ms late: a busy event loop
+    const requestRender = vi.fn();
+    const visualizer = new LiveVisualizer({ theme, requestRender, now: () => clock });
+    try {
+      visualizer.setPhase("listening");
+      const frames = (count: number) => {
+        for (let i = 0; i < count; i++) {
+          clock += 100 + lag;
+          visualizer.setLevels(0.1 + (i % 5) / 20, 0);
+          vi.advanceTimersByTime(100);
+        }
+      };
+      frames(10);
+      expect(visualizer.renderStride).toBe(5);
+      requestRender.mockClear();
+      frames(20);
+      expect(requestRender.mock.calls.length).toBeLessThanOrEqual(4);
+      lag = 0;
+      frames(10);
+      expect(visualizer.renderStride).toBe(1);
+    } finally {
+      visualizer.dispose();
+      vi.useRealTimers();
+    }
+  });
+});

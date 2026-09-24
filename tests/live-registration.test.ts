@@ -397,6 +397,14 @@ describe("registerOpenAILive", () => {
     });
     // Display-only: nothing is sent to the model.
     expect(harness.pi.sendMessage).not.toHaveBeenCalled();
+    // A delegation reaches Pi but is hidden in the pane: the "You said" entry shows it.
+    sessions[0]!.options.delegate(
+      "<realtime_delegation><input>check the build</input></realtime_delegation>",
+    );
+    expect(harness.pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ customType: LIVE_DELEGATION_MESSAGE_TYPE, display: false }),
+      { triggerTurn: true, deliverAs: "steer" },
+    );
     expect(harness.renderers).toContain(LIVE_TURN_ENTRY_TYPE);
     await live.stop();
   });
@@ -412,7 +420,7 @@ describe("registerOpenAILive", () => {
     expect(youText).toContain("<accent>You said");
     expect(youText).toContain("<customMessageText>check the build");
     const agent = renderLiveTurn({ role: "assistant", text: "It is green." }, theme as never);
-    expect(agent.render(60).join("\n")).toContain("<warning>Realtime Voice");
+    expect(agent.render(60).join("\n")).toContain("<warning>Agent said");
   });
 
   test("wraps another extension's editor and restores its factory and history on stop", async () => {
@@ -644,6 +652,7 @@ describe("registerOpenAILive", () => {
         native: {} as LiveNativeBindings,
         close: vi.fn(async () => undefined),
         onControl: vi.fn(),
+        waitForPage: vi.fn(async () => false),
       };
     }
 

@@ -11,6 +11,11 @@ import type { LivePhase, LiveTranscript } from "./controller.ts";
 
 // About 10 Hz; a tick requests a render only when the waveform or spinner visibly changes.
 const ANIMATION_INTERVAL_MS = 100;
+/** A frame this late means the event loop is busy: render the status less often. */
+const BUSY_LAG_MS = 40;
+const IDLE_LAG_MS = 10;
+/** At most one status render every 5 frames (2 per second) under load. */
+const MAX_STRIDE = 5;
 const LIVE_TOGGLE_KEY = Key.ctrlShift("l");
 // SGR plus OSC/APC strings (Pi's cursor marker is an APC); none of them take columns.
 const ANSI_ESCAPE_REGEXP = new RegExp(
@@ -34,6 +39,8 @@ export function liveSegmentWidth(width: number): number {
 export interface LiveVisualizerOptions {
   theme: Theme;
   requestRender(): void;
+  /** Clock for tests. */
+  now?: () => number;
 }
 
 /**
@@ -123,19 +130,45 @@ export class LiveVisualizer {
   #transcripts: TranscriptSide[] = [];
   #animationInterval: NodeJS.Timeout | undefined;
   #lastAnimation = "";
+  #dirty = false;
+  #stride = 1;
+  #lastTick: number;
 
   constructor(options: LiveVisualizerOptions) {
     this.#options = options;
-    this.#animationInterval = setInterval(() => {
-      this.#frame += 1;
-      const decayed = this.#displayLevel * 0.84;
-      this.#displayLevel = Math.max(this.#inputLevel, decayed < 0.001 ? 0 : decayed);
-      const animation = this.#renderWave() + this.#renderIcon();
-      if (animation === this.#lastAnimation) return;
-      this.#lastAnimation = animation;
-      this.#options.requestRender();
-    }, ANIMATION_INTERVAL_MS);
+    const now = options.now ?? Date.now;
+    this.#lastTick = now();
+    this.#animationInterval = setInterval(() => this.#tick(now()), ANIMATION_INTERVAL_MS);
     this.#animationInterval.unref?.();
+  }
+
+  /**
+   * One frame: levels, transcripts, and the animation only mark the status dirty, and a frame
+   * renders it at most once. Every Pi render redraws the whole session, which on a long session
+   * costs tens of milliseconds, so when frames arrive late (a busy event loop) the status renders
+   * only every few frames. Otherwise status redraws starve the call's own socket messages.
+   */
+  #tick(now: number): void {
+    const lag = now - this.#lastTick - ANIMATION_INTERVAL_MS;
+    this.#lastTick = now;
+    if (lag > BUSY_LAG_MS) this.#stride = Math.min(MAX_STRIDE, this.#stride + 1);
+    else if (lag < IDLE_LAG_MS && this.#stride > 1) this.#stride -= 1;
+    this.#frame += 1;
+    const decayed = this.#displayLevel * 0.84;
+    this.#displayLevel = Math.max(this.#inputLevel, decayed < 0.001 ? 0 : decayed);
+    const animation = this.#renderWave() + this.#renderIcon();
+    if (animation !== this.#lastAnimation) {
+      this.#lastAnimation = animation;
+      this.#dirty = true;
+    }
+    if (!this.#dirty || this.#frame % this.#stride !== 0) return;
+    this.#dirty = false;
+    this.#options.requestRender();
+  }
+
+  /** Frames between status renders: 1 normally, up to MAX_STRIDE while the event loop is busy. */
+  get renderStride(): number {
+    return this.#stride;
   }
 
   setPhase(phase: LivePhase): void {
@@ -162,7 +195,7 @@ export class LiveVisualizer {
     if (this.#transcripts.at(-1)?.role === "user" && user && !user.final) return;
     const others = this.#transcripts.filter((side) => side.role !== "user");
     this.#transcripts = [...others, { role: "user", text: "" }];
-    this.#options.requestRender();
+    this.#dirty = true;
   }
 
   setInputLevel(level: number): void {
@@ -170,7 +203,7 @@ export class LiveVisualizer {
     if (this.#inputLevel === next) return;
     this.#inputLevel = next;
     if (next > this.#displayLevel) this.#displayLevel = next;
-    this.#options.requestRender();
+    this.#dirty = true;
   }
 
   /** `undefined` clears both sides (a new or parked session). */
@@ -193,7 +226,7 @@ export class LiveVisualizer {
     this.#transcripts = text
       ? [...others, { role: transcript.role, text, final: transcript.final }]
       : others;
-    this.#options.requestRender();
+    this.#dirty = true;
   }
 
   dispose(): void {

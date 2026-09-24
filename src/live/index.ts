@@ -40,6 +40,8 @@ export const LIVE_COMMAND = "live";
 export const LIVE_DELEGATION_MESSAGE_TYPE = "better-openai-live-delegation";
 /** Display-only log of the voice conversation; appendEntry keeps it out of model context. */
 export const LIVE_TURN_ENTRY_TYPE = "better-openai-live-turn";
+/** How long /live waits for an already open audio page to reconnect before printing its link. */
+export const PAGE_REUSE_MS = 4_000;
 
 interface LiveTurnEntry {
   role: LiveTranscript["role"];
@@ -249,10 +251,19 @@ export function registerOpenAILive(
       return;
     }
     if (browserAudio) {
-      ctx.ui.notify(
-        `Live audio page: ${browserAudio.url} (remote pi: ssh -L ${cfg.live.browserPort}:127.0.0.1:${cfg.live.browserPort})`,
-        "info",
-      );
+      // A page left open by the previous call reconnects by itself; print the link (and so open
+      // another tab) only when no page comes back.
+      const audio = browserAudio;
+      void audio
+        .waitForPage(PAGE_REUSE_MS)
+        .then((reused) =>
+          ctx.ui.notify(
+            reused
+              ? "Live voice is using the open audio page."
+              : `Live audio page: ${audio.url} (remote pi: ssh -L ${cfg.live.browserPort}:127.0.0.1:${cfg.live.browserPort})`,
+            "info",
+          ),
+        );
     }
 
     let ownRun = undefined as ActiveLiveRun | undefined;
@@ -332,7 +343,8 @@ export function registerOpenAILive(
               {
                 customType: LIVE_DELEGATION_MESSAGE_TYPE,
                 content: request,
-                display: true,
+                // In context for Pi, hidden in the pane: the "You said" entry already shows it.
+                display: false,
                 details: { source: "live" },
               },
               { triggerTurn: true, deliverAs: "steer" },
@@ -587,7 +599,7 @@ export function renderLiveTurn(
   const user = entry?.role !== "assistant";
   const text = typeof entry?.text === "string" ? entry.text : "Voice transcript unavailable.";
   const label = theme.bold(
-    theme.fg(SIDE_COLORS[user ? "user" : "assistant"], user ? "You said" : "Realtime Voice"),
+    theme.fg(SIDE_COLORS[user ? "user" : "assistant"], user ? "You said" : "Agent said"),
   );
   const body = theme.fg("customMessageText", text);
   const box = new Box(1, 1, (line) => theme.bg("customMessageBg", line));

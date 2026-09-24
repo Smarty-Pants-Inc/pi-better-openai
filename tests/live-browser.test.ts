@@ -98,11 +98,13 @@ function runPageScript(options: { devices?: FakeDevice[]; saved?: Record<string,
     tracks.push(track);
     return track;
   };
+  let socketsOpened = 0;
   class FakeWebSocket {
     static OPEN = 1;
     readyState = 1;
     constructor() {
       socket = this as unknown as typeof socket;
+      socketsOpened += 1;
     }
     send(data: string) {
       sent.push(JSON.parse(data) as Record<string, unknown>);
@@ -218,6 +220,7 @@ function runPageScript(options: { devices?: FakeDevice[]; saved?: Record<string,
     detail: () => element("detail").textContent,
     error: () => element("error").textContent,
     openSocket: () => socket?.onopen?.(),
+    socketsOpened: () => socketsOpened,
     dropSocket: (code: number) => socket?.onclose?.({ code }),
     connections,
     receive: (message: Record<string, unknown>) =>
@@ -593,6 +596,44 @@ describe("browser live audio", () => {
     expect(page.status()).toBe("Muted in pi.");
     page.receive({ type: "mute", muted: false });
     expect(page.status()).toBe("Live. Speak to pi.");
+  });
+
+  test("after pi ends the call the page waits and reconnects, so calls reuse one tab", async () => {
+    vi.useFakeTimers();
+    try {
+      const page = runPageScript();
+      page.openSocket();
+      const opened = page.socketsOpened();
+      page.dropSocket(4002); // pi ended the call (/live stopped)
+      expect(page.status()).toBe("Call ended; waiting for pi");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(page.socketsOpened()).toBe(opened + 1);
+      // Nothing is listening yet: it keeps waiting instead of giving up.
+      for (let attempt = 0; attempt < 8; attempt++) {
+        page.dropSocket(1006);
+        expect(page.status()).toBe("Call ended; waiting for pi");
+        await vi.advanceTimersByTimeAsync(2_000);
+      }
+      expect(page.socketsOpened()).toBe(opened + 9);
+      page.openSocket(); // the next /live
+      expect(page.status()).not.toContain("waiting");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("the server reports whether a page is connected", async () => {
+    const bound = await startBrowserLiveAudio({ port: 0, token: TOKEN });
+    try {
+      expect(await bound.waitForPage(50)).toBe(false);
+      const waiting = bound.waitForPage(5_000);
+      const page = openPage(Number(new URL(bound.url).port), TOKEN);
+      await page.opened;
+      expect(await waiting).toBe(true);
+      expect(await bound.waitForPage(0)).toBe(true);
+    } finally {
+      await bound.close();
+    }
   });
 
   test("the voice and mute buttons control the call like GipPity's page", async () => {

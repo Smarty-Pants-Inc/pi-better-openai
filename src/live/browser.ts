@@ -41,6 +41,8 @@ export interface BrowserLiveAudio {
   readonly native: LiveNativeBindings;
   /** Receives the page's mute and stop buttons. */
   onControl(listener: (action: BrowserPageAction) => void): void;
+  /** True once a page is connected; waits up to `timeoutMs` for one to (re)connect. */
+  waitForPage(timeoutMs: number): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -131,6 +133,7 @@ export async function startBrowserLiveAudio(
   const peers = new Set<BrowserPeer>();
   const captures = new Set<(samples: Float32Array) => void>();
   let controlListener: ((action: BrowserPageAction) => void) | undefined;
+  const pageWaiters = new Set<(connected: boolean) => void>();
 
   const send = (socket: WebSocket | undefined, message: Record<string, unknown>): boolean => {
     if (socket?.readyState !== WebSocket.OPEN) return false;
@@ -355,6 +358,8 @@ export async function startBrowserLiveAudio(
           authenticated = true;
           const previous = client;
           client = ws;
+          for (const resolve of pageWaiters) resolve(true);
+          pageWaiters.clear();
           if (previous && previous !== ws) previous.close(CLOSE_REPLACED, "replaced");
           send(ws, {
             type: "audio.defaults",
@@ -401,6 +406,21 @@ export async function startBrowserLiveAudio(
     onControl: (listener) => {
       controlListener = listener;
     },
+    waitForPage: (timeoutMs) =>
+      client
+        ? Promise.resolve(true)
+        : new Promise<boolean>((resolve) => {
+            const timer = setTimeout(() => {
+              pageWaiters.delete(finish);
+              resolve(false);
+            }, timeoutMs);
+            timer.unref?.();
+            const finish = (connected: boolean) => {
+              clearTimeout(timer);
+              resolve(connected);
+            };
+            pageWaiters.add(finish);
+          }),
     close: async () => {
       await Promise.all([...peers].map((peer) => peer.close()));
       client = undefined;
