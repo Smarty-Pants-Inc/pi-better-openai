@@ -48,15 +48,6 @@ describe("config helpers", () => {
     expect(_test.DEFAULT_CONFIG.usage?.autoRedeemBankedResets).toBe(true);
     expect(_test.DEFAULT_IMAGE_CONFIG.defaultModel).toBe("gpt-image-2.5");
     expect(_test.DEFAULT_IMAGE_CONFIG.defaultSave).toBe("project");
-    expect(_test.DEFAULT_LIVE_CONFIG).toEqual({
-      enabled: true,
-      voice: "sol",
-      provider: "",
-      audio: "local",
-      browserPort: 8795,
-      inputDevice: "",
-      outputDevice: "",
-    });
     expect(_test.DEFAULT_PET_CONFIG.placement).toBe("inline-right");
     expect(_test.DEFAULT_PET_CONFIG.state).toBe("idle");
     expect(_test.DEFAULT_PET_CONFIG.thinkingState).toBe("review");
@@ -234,7 +225,6 @@ describe("config helpers", () => {
           },
           footer: { mode: "replace" },
           image: { defaultSave: "global", outputFormat: "jpeg", timeoutMs: 40000 },
-          live: { enabled: false, voice: "spruce" },
           pets: {
             placement: "badge",
             idleEmotes: false,
@@ -246,7 +236,6 @@ describe("config helpers", () => {
           usage: { enabled: true },
           footer: { mode: "status" },
           image: { outputFormat: "webp" },
-          live: { enabled: true },
           pets: { sizeCells: 6 },
         });
 
@@ -264,7 +253,6 @@ describe("config helpers", () => {
           outputFormat: "webp",
           timeoutMs: 40000,
         });
-        expect(resolved.live).toEqual({ ..._test.DEFAULT_LIVE_CONFIG, voice: "spruce" });
         expect(resolved.pets).toMatchObject({
           placement: "badge",
           idleEmotes: false,
@@ -281,7 +269,6 @@ describe("config helpers", () => {
       writeConfig(configPath, {
         footer: { mode: "float" },
         image: { enabled: true, defaultSave: "desktop", outputFormat: "gif" },
-        live: { enabled: false, voice: "robot", audio: "speakers", browserPort: 80 },
         pets: { enabled: true, placement: "ceiling", state: "sleeping", thinkingState: "ponder" },
       });
 
@@ -289,7 +276,6 @@ describe("config helpers", () => {
 
       expect(parsed?.footer).toBeUndefined();
       expect(parsed?.image).toEqual({ enabled: true });
-      expect(parsed?.live).toEqual({ enabled: false });
       expect(parsed?.pets).toEqual({ enabled: true });
     });
   });
@@ -301,29 +287,6 @@ describe("config helpers", () => {
       expect(readConfig(configPath)?.websearch).toEqual({ provider: "cliproxyapi" });
       writeConfig(configPath, { websearch: { provider: 7 } });
       expect(readConfig(configPath)?.websearch).toEqual({});
-    });
-  });
-
-  test("reads live gateway and browser audio settings", () => {
-    withTempDir((tempDir) => {
-      const configPath = join(tempDir, "config.json");
-      writeConfig(configPath, {
-        live: {
-          provider: " cliproxyapi ",
-          audio: "browser",
-          browserPort: 9001,
-          inputDevice: " Yealink BT51 ",
-          outputDevice: "Yealink",
-        },
-      });
-
-      expect(readConfig(configPath)?.live).toEqual({
-        provider: "cliproxyapi",
-        audio: "browser",
-        browserPort: 9001,
-        inputDevice: "Yealink BT51",
-        outputDevice: "Yealink",
-      });
     });
   });
 
@@ -360,8 +323,8 @@ describe("config helpers", () => {
     expect(descriptors.get("pets.sizeCells")?.parse("12")).toBe(12);
     expect(descriptors.get("image.timeoutMs")?.parse("45000")).toBe(45000);
     expect(descriptors.get("image.defaultModel")?.values).toEqual(["gpt-image-2.5", "gpt-image-2"]);
-    expect(descriptors.get("live.enabled")?.parse("true")).toBe(true);
-    expect(descriptors.get("live.voice")?.parse("vale")).toBe("vale");
+    // Voice moved to smarty-voice; its old `live` section has no settings here.
+    expect(descriptors.has("live.enabled")).toBe(false);
   });
 
   test("applies settings writes with persisted raw config shapes", () => {
@@ -408,9 +371,9 @@ describe("config helpers", () => {
     expect(applySettingToRawConfig(raw, "image.timeoutMs", "45000").image).toEqual({
       timeoutMs: 45000,
     });
-    expect(applySettingToRawConfig(raw, "live.voice", "vale").live).toEqual({
+    // smarty-voice migrates the old `live` section once, so settings writes keep it.
+    expect(applySettingToRawConfig(raw, "image.timeoutMs", "45000").live).toEqual({
       unknownLive: "yes",
-      voice: "vale",
     });
   });
 });

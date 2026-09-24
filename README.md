@@ -1,6 +1,6 @@
 # pi-better-openai
 
-A pi extension for OpenAI subscription workflows: fast mode, usage visibility, realtime voice, footer polish, custom Codex pets, and image generation through `openai-codex` auth.
+A pi extension for OpenAI subscription workflows: fast mode, usage visibility, footer polish, custom Codex pets, and image generation through `openai-codex` auth.
 
 ## Install
 
@@ -20,13 +20,13 @@ pi install npm:@monotykamary/pi-better-openai
 
 ## Authentication
 
-Usage display, image generation, and live voice require pi's `openai-codex` OAuth credentials.
+Usage display and image generation require pi's `openai-codex` OAuth credentials.
 
 1. In pi, run `/login openai-codex`.
 2. Verify subscription usage with `/openai-usage`, or open `/openai-settings` and check **Diagnostics**.
 3. The extension reads auth from pi's agent auth store, normally `~/.pi/agent/auth.json`. Do not copy, paste, or commit values from this file.
 4. If `PI_CODING_AGENT_DIR` is set, the auth store, global extension config, and global generated-image directory use that agent directory instead of `~/.pi/agent`. A leading `~/` is expanded to your home directory.
-5. When [pi-multiprovider](https://github.com/monotykamary/pi-multiprovider) 0.8.0+ pools several `openai-codex` accounts, the session's active account (chosen with `/switch-account`) is resolved first for usage display, image generation, web search, and live voice; the usage widget refreshes on every switch and whenever a resumed session restores the account, so it never keeps billing the account the session used before. Without that extension, credential resolution is unchanged.
+5. When [pi-multiprovider](https://github.com/monotykamary/pi-multiprovider) 0.8.0+ pools several `openai-codex` accounts, the session's active account (chosen with `/switch-account`) is resolved first for usage display, image generation, and web search; the usage widget refreshes on every switch and whenever a resumed session restores the account, so it never keeps billing the account the session used before. Without that extension, credential resolution is unchanged.
 
 ## Features
 
@@ -37,13 +37,11 @@ Usage display, image generation, and live voice require pi's `openai-codex` OAut
 - Footer customization for model, thinking, fast mode, usage, and token/cost context.
 - OpenAI image generation/editing through the `openai_image` tool and `/openai-image` command.
 - Live web search through the `openai_websearch` tool and `/openai-websearch` command, backed by the ChatGPT Codex search backend.
-- Codex-backed realtime voice through `/live`, with an animated microphone waveform and coding-task delegation into the active pi session.
 - Animated Codex custom pets rendered in the Better OpenAI footer.
 - Commands:
   - `/fast` toggles fast mode.
   - `/openai-image <prompt>` generates an image directly.
   - `/openai-websearch <query>` searches the web and inserts the cited answer into the session.
-  - `/live` starts or stops realtime voice mode. `Ctrl+Shift+L` is the keyboard toggle.
   - `/pets [help|list|wake [slug]|tuck|select <slug>]` renders or manages custom pets from `${CODEX_HOME:-~/.codex}/pets`.
   - `/openai-usage` shows current OpenAI subscription usage.
   - `/openai-resets` inspects and manually redeems a banked Codex reset.
@@ -106,10 +104,6 @@ Example config:
     "outputFormat": "png",
     "timeoutMs": 180000
   },
-  "live": {
-    "enabled": true,
-    "voice": "sol"
-  },
   "pets": {
     "enabled": false,
     "slug": "",
@@ -131,38 +125,9 @@ The extension adds `gpt-6-astra`, `gpt-daybreak-blue-latest`, and `gpt-daybreak-
 
 Daybreak models require separate OpenAI approval and provisioning. pi currently exposes reasoning levels through `max`; Codex's `ultra` automatic-delegation mode is not a pi thinking level.
 
-## Live voice
+## Voice
 
-Run `/live` or press `Ctrl+Shift+L` to start realtime voice. `Ctrl+L` remains pi's model selector, so the extension deliberately uses the shifted chord. The call status is drawn right-aligned on the bottom border of pi's editor, so it adds no rows, pi's working indicator keeps the top border, and you can keep typing during a call:
-
-- `Space` toggles microphone mute, and `Escape` ends the call, only while the editor is empty. With text in the editor, both keys edit as usual. While pi is streaming, the first `Escape` ends the call and a second `Escape` aborts pi's turn as usual.
-- `Ctrl+Shift+L` or `/live` ends the call at any time.
-- `Enter` sends typed text to pi as a normal message. Live voice also receives it as silent `[USER] ` context (the Codex realtime framing), so it knows what you asked; pi's answer is then spoken as a short update.
-- A small waveform reacts to microphone RMS level, next to the state icon and the latest words of the current speaker only: yours (`you ›`) while you speak, the voice's (`live ›`) while it speaks. The status has a fixed width (40 columns, at most 45% of the terminal), so it does not move as words stream in; long text shows its newest words after a leading `…`. Before anyone speaks it shows the state (connecting, listening, working, speaking, muted, or error) and the key hints. In narrow terminals the transcript is dropped first, then the state label.
-- Streaming speech transcripts stay in that status. Coding and repository requests are delegated into the current pi agent session; normal tool and assistant output continues in the transcript, and the final result is spoken back through the live session.
-
-Choose the spoken voice under **Live voice** in `/openai-settings`. Supported values are `arbor`, `breeze`, `cove`, `ember`, `juniper`, `maple`, `sol`, `spruce`, and `vale`.
-
-Live mode requires interactive TUI mode, microphone/speaker access, `openai-codex` OAuth, and one of these native targets: macOS arm64/x64, Linux arm64/x64, or Windows x64. Standard `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` settings are honored for signaling and sideband traffic. Audio/WebRTC uses the MIT-licensed native platform packages from [`can1357/oh-my-pi`](https://github.com/can1357/oh-my-pi). The adapted implementation is attributed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). On macOS, launchd-managed LocalTerm users should rerun `localterm install` after upgrading LocalTerm and allow its microphone prompt.
-
-The feature uses Codex Desktop's experimental `gpt-live-1-codex`/Quicksilver protocol rather than the public OpenAI Realtime API. Upstream protocol or entitlement changes may temporarily break it.
-
-### Gateway and remote audio
-
-Two optional `live` settings support a pi session on a remote host, such as over SSH:
-
-```json
-{
-  "live": { "provider": "cliproxyapi", "audio": "browser", "browserPort": 8795 }
-}
-```
-
-- `provider` names a pi provider for a [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) gateway. Live signaling (`POST /v1/live`) and the sideband (`/v1/live/{call}`) then use that provider's base URL and API key. The gateway owns ChatGPT OAuth and account selection; pi needs no `openai-codex` login.
-- `audio: "browser"` makes a browser tab the WebRTC media peer. It owns the microphone, speaker, and echo cancellation, so the pi host needs no audio devices or native audio packages. pi keeps signaling, the sideband, and delegation. `/live` serves a page on `127.0.0.1:<browserPort>` and prints its URL with a private token (stored in `~/.pi/agent/pi-better-openai/live-browser-token`). The page only accepts loopback hosts, same-origin WebSockets, and that token.
-
-For pi on a remote host, forward the port from the machine with the microphone, for example with `LocalForward 8795 127.0.0.1:8795` in `~/.ssh/config` or `ssh -L 8795:127.0.0.1:8795 host`. Open the printed `http://localhost:8795/#…` URL (browsers allow the microphone on `localhost`), click **Enable audio** once, and keep the tab open. The tab follows `/live` sessions and stops retrying when live mode ends. Only one pi process per host can serve the page at a time.
-
-The page has **Microphone device** and **Speaker device** pickers. `live.inputDevice` and `live.outputDevice` set their defaults by device label, for example `"Yealink BT51"`. The page matches an exact label first, then a label that contains the text, and ignores the browser's `default` and `communications` aliases. A choice made in the page is saved in that browser and beats the config default. When a chosen device is missing, the page shows a warning and uses the system default. It switches to the device when it appears, also during a call. The page never changes operating system audio settings.
+Realtime voice (`/live`) moved to [Smarty Voice](https://github.com/Smarty-Pants-Inc/smarty-voice) (`/voice`). Its first run copies this file's `live` settings into `smarty-voice.json`; settings writes here keep the `live` section.
 
 ## Image generation
 
@@ -246,7 +211,7 @@ Custom pets should end up in `${CODEX_HOME:-~/.codex}/pets/<pet-name>/` with `pe
 
 ## Attribution
 
-[`pi-better-openai`](https://github.com/mattleong/pi-better-openai) was originally created by [Matt Leong](https://github.com/mattleong). This fork is maintained and published under the `@monotykamary` namespace while retaining Matt's authorship and the original Git history. Realtime voice adaptations have separate attribution in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+[`pi-better-openai`](https://github.com/mattleong/pi-better-openai) was originally created by [Matt Leong](https://github.com/mattleong). This fork is maintained and published under the `@monotykamary` namespace while retaining Matt's authorship and the original Git history.
 
 ## Screenshots
 
