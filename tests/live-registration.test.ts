@@ -643,6 +643,7 @@ describe("registerOpenAILive", () => {
         url: "http://localhost:18795/#token",
         native: {} as LiveNativeBindings,
         close: vi.fn(async () => undefined),
+        onControl: vi.fn(),
       };
     }
 

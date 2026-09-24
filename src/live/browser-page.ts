@@ -18,15 +18,29 @@ export const BROWSER_PAGE_HTML = `<!doctype html>
   body { font: 16px system-ui, sans-serif; max-width: 32rem; margin: 3rem auto; padding: 0 1rem; color: #ddd; background: #111; }
   button { font: inherit; padding: .5rem 1rem; }
   meter { width: 100%; }
-  #status { margin: 1rem 0; }
+  #status { margin: .5rem 0 0; font-weight: 600; text-align: center; }
+  #detail { margin: .25rem 0 1rem; color: #999; text-align: center; min-height: 1.2em; }
+  #error { color: #f77; text-align: center; }
+  #error:empty { display: none; }
   select { font: inherit; max-width: 100%; }
   #device-warning { color: #fc6; }
+  .controls { display: grid; justify-items: center; gap: .75rem; margin: 1.5rem 0; }
+  #voice { width: 132px; height: 132px; border-radius: 50%; border: 2px solid #5b7fbf; background: #1c2230; color: #9cc; font-size: 15px; cursor: pointer; }
+  #voice[data-state="live"] { border-color: #8c6; background: #23301c; color: #cfa; }
+  #voice[data-state="connecting"] { border-style: dashed; }
+  #mute[aria-pressed="true"] { background: #402; color: #fcc; }
 </style>
 </head>
 <body>
 <h1>pi live voice</h1>
+<div class="controls">
+  <button id="voice" type="button" data-state="off">Tap to enable voice</button>
+  <button id="mute" type="button" aria-pressed="false" hidden>Mute mic</button>
+</div>
 <p id="status">Starting…</p>
-<p><button id="enable" hidden>Enable audio</button> <button id="reconnect" hidden>Reconnect</button></p>
+<p id="detail"></p>
+<p id="error" role="alert"></p>
+<p><button id="reconnect" hidden>Reconnect</button></p>
 <p>Microphone <meter id="mic" max="0.3"></meter></p>
 <p>Speaker <meter id="speaker" max="0.3"></meter></p>
 <p><label>Microphone device <select id="input-device"><option value="">System default</option></select></label></p>
@@ -157,9 +171,24 @@ function applyDevices() {
   return applying;
 }
 
-function status(text) { $("status").textContent = text; }
+// GipPity-style controls: one voice button (enable, then tap to stop), a mute button, the
+// call phase, and a separate error line.
+let phase = "";
+function status(text) { $("status").textContent = text; if (!/^Error/.test(text)) $("error").textContent = ""; renderControls(); }
+function isMuted() { return !!stream && stream.getAudioTracks().every((track) => !track.enabled); }
+function renderControls() {
+  const button = $("voice");
+  const state = !unlocked ? "off" : live ? "live" : pc ? "connecting" : "idle";
+  button.dataset.state = state;
+  button.textContent = state === "off" ? "Tap to enable voice" : state === "live" ? "Tap to stop" : state === "connecting" ? "Connecting…" : "Voice enabled";
+  button.disabled = state === "idle" || state === "connecting";
+  $("mute").hidden = !live;
+  $("mute").setAttribute("aria-pressed", String(isMuted()));
+  $("mute").textContent = isMuted() ? "Unmute mic" : "Mute mic";
+  $("detail").textContent = live ? (isMuted() ? "Microphone muted" : phase === "speaking" ? "Speaking" : "Listening") : state === "idle" ? "Run /live in pi to start a call" : "";
+}
 function send(message) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message)); }
-function idleText() { return unlocked ? "Connected to pi. Waiting for /live to take the floor…" : "Connected to pi. Click Enable audio."; }
+function idleText() { return unlocked ? "Connected to pi" : "Connected to pi. Tap to enable voice."; }
 function callText() {
   if (stream && stream.getAudioTracks().every((track) => !track.enabled)) return "Muted in pi.";
   return live ? "Live. Speak to pi." : "Connecting voice…";
@@ -179,7 +208,8 @@ function fail(error) {
   const message = (error && error.message) || String(error);
   send({ type: "failure", message: "Browser audio: " + message });
   hangup();
-  status("Error: " + message);
+  status("Could not keep the call");
+  $("error").textContent = message;
 }
 
 function rms(analyser, buffer) {
@@ -202,6 +232,8 @@ function startMeter(remote) {
     const muted = !stream || stream.getAudioTracks().every((track) => !track.enabled);
     const input = muted ? 0 : rms(mic, buffer), output = rms(speaker, buffer);
     $("mic").value = input; $("speaker").value = output;
+    const next = output > 0.015 ? "speaking" : "listening";
+    if (next !== phase) { phase = next; renderControls(); }
     send({ type: "levels", input, output });
   }, 100);
   stopMeter = () => { clearInterval(timer); micSource.disconnect(); speakerSource.disconnect(); };
@@ -219,7 +251,7 @@ function iceGathered(connection) {
 
 async function startCall() {
   if (!unlocked) {
-    status("pi wants to talk. Click Enable audio.");
+    status("pi wants to talk. Tap to enable voice.");
     await new Promise((resolve) => unlockWaiters.push(resolve));
   }
   hangup();
@@ -290,21 +322,24 @@ function connect() {
   };
 }
 
-$("enable").onclick = async () => {
+$("voice").onclick = async () => {
+  if (live) { send({ type: "control", action: "stop" }); return; }
+  if (unlocked) return;
   try {
     context = new AudioContext();
     await context.resume();
     const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
     probe.getTracks().forEach((track) => track.stop());
     unlocked = true;
-    $("enable").hidden = true;
     await applyDevices();
     unlockWaiters.splice(0).forEach((resolve) => resolve());
     status(ws && ws.readyState === WebSocket.OPEN ? idleText() : "Audio enabled. Waiting for pi…");
   } catch (error) {
-    status("Microphone unavailable: " + ((error && error.message) || error));
+    status("Microphone unavailable");
+    $("error").textContent = (error && error.message) || String(error);
   }
 };
+$("mute").onclick = () => send({ type: "control", action: "mute" });
 $("reconnect").onclick = () => { retry = 0; connect(); };
 for (const kind of ["input", "output"]) {
   $(kind + "-device").onchange = () => {
@@ -318,7 +353,7 @@ if (!window.isSecureContext || !navigator.mediaDevices) {
 } else if (!token) {
   status("Missing page token. Open the full URL that pi printed.");
 } else {
-  $("enable").hidden = false;
+  renderControls();
   if (navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener("devicechange", () => { applyDevices(); });
   applyDevices();
   connect();

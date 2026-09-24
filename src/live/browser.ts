@@ -30,11 +30,17 @@ type PageMessage =
   | { type: "open" }
   | { type: "event"; payload: string }
   | { type: "levels"; input: number; output: number }
-  | { type: "failure"; message: string };
+  | { type: "failure"; message: string }
+  | { type: "control"; action: BrowserPageAction };
+
+/** The page's mute and stop buttons; they do what the TUI keys do. */
+export type BrowserPageAction = "mute" | "stop";
 
 export interface BrowserLiveAudio {
   readonly url: string;
   readonly native: LiveNativeBindings;
+  /** Receives the page's mute and stop buttons. */
+  onControl(listener: (action: BrowserPageAction) => void): void;
   close(): Promise<void>;
 }
 
@@ -90,6 +96,10 @@ function parsePageMessage(data: RawData): PageMessage | undefined {
         return typeof value.sdp === "string" ? { type: "offer", sdp: value.sdp } : undefined;
       case "open":
         return { type: "open" };
+      case "control":
+        return value.action === "mute" || value.action === "stop"
+          ? { type: "control", action: value.action }
+          : undefined;
       case "event":
         return typeof value.payload === "string"
           ? { type: "event", payload: value.payload }
@@ -120,6 +130,7 @@ export async function startBrowserLiveAudio(
   // fails with EADDRINUSE. Revisit with a shared listener if people run parallel voice.
   const peers = new Set<BrowserPeer>();
   const captures = new Set<(samples: Float32Array) => void>();
+  let controlListener: ((action: BrowserPageAction) => void) | undefined;
 
   const send = (socket: WebSocket | undefined, message: Record<string, unknown>): boolean => {
     if (socket?.readyState !== WebSocket.OPEN) return false;
@@ -226,6 +237,9 @@ export async function startBrowserLiveAudio(
         }
         case "failure":
           this.fail(message.message);
+          break;
+        case "control":
+          controlListener?.(message.action);
           break;
       }
     }
@@ -384,6 +398,9 @@ export async function startBrowserLiveAudio(
   return {
     url: `http://localhost:${(server.address() as { port: number }).port}/#${options.token}`,
     native,
+    onControl: (listener) => {
+      controlListener = listener;
+    },
     close: async () => {
       await Promise.all([...peers].map((peer) => peer.close()));
       client = undefined;

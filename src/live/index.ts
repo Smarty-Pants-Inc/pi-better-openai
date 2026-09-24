@@ -280,12 +280,17 @@ export function registerOpenAILive(
         requestRender: () => tui.requestRender(),
       });
       visualizer.setPhase("standby");
+      const runAction = (action: "mute" | "stop") => {
+        if (action === "mute") session?.toggleMute();
+        else finishUi({});
+      };
       removeKeys = ctx.ui.onTerminalInput((data) => {
         const action = liveKeyAction(data, ctx.ui.getEditorText() === "");
-        if (action === "mute") session?.toggleMute();
-        else if (action === "stop") finishUi({});
+        if (action) runAction(action);
         return action ? { consume: true } : undefined;
       });
+      // The page's mute and stop buttons do what Space and Esc do.
+      browserAudio?.onControl(runAction);
 
       const terminalHandle: FocusTerminalHandle = {
         write: (data) => tui.terminal.write(data),
