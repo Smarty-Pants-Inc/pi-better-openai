@@ -409,10 +409,10 @@ describe("registerOpenAILive", () => {
     };
     const you = renderLiveTurn({ role: "user", text: "check the build" }, theme as never);
     const youText = you.render(60).join("\n");
-    expect(youText).toContain("<customMessageLabel>You said");
+    expect(youText).toContain("<accent>You said");
     expect(youText).toContain("<customMessageText>check the build");
     const agent = renderLiveTurn({ role: "assistant", text: "It is green." }, theme as never);
-    expect(agent.render(60).join("\n")).toContain("<customMessageLabel>Realtime Voice");
+    expect(agent.render(60).join("\n")).toContain("<warning>Realtime Voice");
   });
 
   test("wraps another extension's editor and restores its factory and history on stop", async () => {

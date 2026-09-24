@@ -72,10 +72,14 @@ const TRANSCRIPT_LABELS: Record<LiveTranscript["role"], string> = {
   assistant: "agent: ",
 };
 
-/** Each side's color (theme tokens, so it follows /theme): label, meter, and text. */
+/**
+ * Each side's color (theme tokens, so it follows /theme): status label, meter, text, and the
+ * Pi-pane log box labels. Teal and amber are different hues in both built-in themes
+ * (dark #8abeb7 / #ffff00, light #5a8080 / #9a7326); accent and borderAccent were near-identical.
+ */
 export const SIDE_COLORS: Record<LiveTranscript["role"], ThemeColor> = {
   user: "accent",
-  assistant: "borderAccent",
+  assistant: "warning",
 };
 
 /** Microphone RMS that counts as the user speaking (the barge-in level). */
