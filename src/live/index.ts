@@ -2,6 +2,7 @@ import {
   CustomEditor,
   type ExtensionAPI,
   type ExtensionContext,
+  type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, Text, type TUI } from "@earendil-works/pi-tui";
 import { type CodexCredentials, getCodexCredentials } from "../codex-auth.ts";
@@ -32,6 +33,7 @@ import {
   LiveVisualizer,
   LIVE_VISUALIZER_TOGGLE_KEY,
   liveKeyAction,
+  SIDE_COLORS,
 } from "./visualizer.ts";
 
 export const LIVE_COMMAND = "live";
@@ -577,14 +579,16 @@ export function registerOpenAILive(
 export function renderLiveTurn(
   entry: LiveTurnEntry | undefined,
   theme: {
-    fg(color: "customMessageLabel" | "customMessageText", text: string): string;
+    fg(color: ThemeColor, text: string): string;
     bg(color: "customMessageBg", text: string): string;
     bold(text: string): string;
   },
 ): Box {
   const user = entry?.role !== "assistant";
   const text = typeof entry?.text === "string" ? entry.text : "Voice transcript unavailable.";
-  const label = theme.bold(theme.fg("customMessageLabel", user ? "You said" : "Realtime Voice"));
+  const label = theme.bold(
+    theme.fg(SIDE_COLORS[user ? "user" : "assistant"], user ? "You said" : "Realtime Voice"),
+  );
   const body = theme.fg("customMessageText", text);
   const box = new Box(1, 1, (line) => theme.bg("customMessageBg", line));
   box.addChild(new Text(`${label}\n${body}`, 0, 0));
