@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CODEX_PROVIDER_ID, getActiveMultiproviderService } from "./multiprovider.ts";
+import { CHATGPT_PROVIDER_IDS, getActiveMultiproviderService } from "./multiprovider.ts";
 import { piAgentDir } from "./paths.ts";
 
 export const AUTH_FILE = join(piAgentDir(), "auth.json");
@@ -89,11 +89,13 @@ export function parseCodexRegistryCredentials(
           : typeof parsed.account_id === "string"
             ? parsed.account_id
             : undefined;
-      if (accessToken?.trim() && accountId?.trim())
-        return { accessToken: accessToken.trim(), accountId: accountId.trim() };
+      const resolvedAccountId =
+        accountId?.trim() || (accessToken && extractAccountIdFromJwt(accessToken));
+      if (accessToken?.trim() && resolvedAccountId)
+        return { accessToken: accessToken.trim(), accountId: resolvedAccountId };
     }
   } catch {
-    // Plain bearer token is expected for openai-codex in pi.
+    // Pi returns the plain bearer token for ChatGPT OAuth.
   }
   const accountId = extractAccountIdFromJwt(value);
   return accountId ? { accessToken: value, accountId } : undefined;
@@ -112,12 +114,14 @@ export function readCodexAuth(): CodexCredentials | undefined {
         }
       | undefined
     >;
-    const entry = auth["openai-codex"];
-    if (entry?.type !== "oauth") return undefined;
-    if (typeof entry.expires === "number" && Date.now() >= entry.expires) return undefined;
-    const accessToken = entry.access?.trim();
-    const accountId = (entry.accountId ?? entry.account_id)?.trim();
-    return accessToken && accountId ? { accessToken, accountId } : undefined;
+    for (const providerId of CHATGPT_PROVIDER_IDS) {
+      const entry = auth[providerId];
+      if (entry?.type !== "oauth") continue;
+      if (typeof entry.expires === "number" && Date.now() >= entry.expires) continue;
+      const credentials = parseCodexRegistryCredentials(JSON.stringify(entry));
+      if (credentials) return credentials;
+    }
+    return undefined;
   } catch {
     return undefined;
   }
@@ -132,28 +136,34 @@ export async function getCodexCredentials(
   // wins over pi's own credential: subscription usage is per-account.
   const multiprovider = getActiveMultiproviderService();
   if (multiprovider && ctx) {
-    try {
-      const resolved = await waitForSignal(
-        multiprovider.resolveActiveAccountAuth(CODEX_PROVIDER_ID, ctx, signal),
-        signal,
-      );
-      const accountId = resolved ? extractAccountIdFromJwt(resolved.accessToken) : undefined;
-      if (resolved && accountId) {
-        return { accessToken: resolved.accessToken, accountId, source: "multiprovider" };
+    for (const providerId of CHATGPT_PROVIDER_IDS) {
+      try {
+        const resolved = await waitForSignal(
+          multiprovider.resolveActiveAccountAuth(providerId, ctx, signal),
+          signal,
+        );
+        const accountId = resolved ? extractAccountIdFromJwt(resolved.accessToken) : undefined;
+        if (resolved && accountId) {
+          return { accessToken: resolved.accessToken, accountId, source: "multiprovider" };
+        }
+      } catch {
+        if (signal?.aborted) throw signal.reason ?? new Error("Operation was aborted.");
+        // Try the legacy pool, then pi-owned credential resolution.
       }
-    } catch {
-      // Fall back to pi-owned credential resolution.
     }
   }
-  const registryRequest = ctx?.modelRegistry?.getApiKeyForProvider(CODEX_PROVIDER_ID);
-  const registryToken = registryRequest
-    ? await waitForSignal(
-        registryRequest.catch(() => undefined),
-        signal,
-      )
-    : undefined;
-  const registryCredentials = parseCodexRegistryCredentials(registryToken);
-  if (registryCredentials) return { ...registryCredentials, source: "modelRegistry" };
+  for (const providerId of CHATGPT_PROVIDER_IDS) {
+    if (signal?.aborted) throw signal.reason ?? new Error("Operation was aborted.");
+    const registryRequest = ctx?.modelRegistry?.getApiKeyForProvider(providerId);
+    const registryToken = registryRequest
+      ? await waitForSignal(
+          registryRequest.catch(() => undefined),
+          signal,
+        )
+      : undefined;
+    const registryCredentials = parseCodexRegistryCredentials(registryToken);
+    if (registryCredentials) return { ...registryCredentials, source: "modelRegistry" };
+  }
   const auth = readCodexAuth();
   return auth ? { ...auth, source: "authFile" } : undefined;
 }

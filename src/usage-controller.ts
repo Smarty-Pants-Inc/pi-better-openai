@@ -216,7 +216,7 @@ export class UsageController {
       this.usageUpdatedAt = this.usageSnapshot ? Date.now() : undefined;
       this.usageError = data
         ? undefined
-        : `Missing openai-codex OAuth credentials in ${AUTH_FILE}.`;
+        : `Missing ChatGPT OAuth credentials in ${AUTH_FILE}. Run /login openai and choose Sign in with ChatGPT.`;
       this.updateFooter(ctx);
       if (options?.notify)
         ctx.ui.notify(this.formatStatus(ctx), this.usageSnapshot ? "info" : "warning");

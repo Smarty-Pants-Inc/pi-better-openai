@@ -20,7 +20,7 @@ import {
 import { registerOpenAICodexModels } from "./src/codex-models.ts";
 import { CONFIG_BASENAME, STATUS_KEY } from "./src/identity.ts";
 import {
-  CODEX_PROVIDER_ID,
+  CHATGPT_PROVIDER_IDS,
   isMultiproviderService,
   MULTIPROVIDER_SERVICE_EVENT,
   setActiveMultiproviderService,
@@ -297,7 +297,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   let unsubscribeMultiprovider: (() => void) | undefined;
   let multiproviderRefreshCtx: ExtensionContext | undefined;
 
-  // Follow pi-multiprovider's active pooled account for openai-codex. The
+  // Follow ChatGPT pooled accounts for openai and legacy openai-codex. The
   // event re-fires with the same stable object at load and session start; the
   // identity check keeps the change subscription attached exactly once. When
   // the extension is absent, nothing here activates and credential resolution
@@ -308,11 +308,16 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       unsubscribeMultiprovider?.();
       multiproviderService = value;
       setActiveMultiproviderService(value);
-      unsubscribeMultiprovider = value.onActiveAccountChanged(CODEX_PROVIDER_ID, (event) => {
-        void usageController.refresh(event.ctx, undefined, { force: true });
-        void resetController.refresh(event.ctx, { force: true }).catch(() => {});
-        updateFooter(event.ctx);
-      });
+      const unsubscribers = CHATGPT_PROVIDER_IDS.map((providerId) =>
+        value.onActiveAccountChanged(providerId, (event) => {
+          void usageController.refresh(event.ctx, undefined, { force: true });
+          void resetController.refresh(event.ctx, { force: true }).catch(() => {});
+          updateFooter(event.ctx);
+        }),
+      );
+      unsubscribeMultiprovider = () => {
+        for (const unsubscribe of unsubscribers) unsubscribe();
+      };
       const ctx = multiproviderRefreshCtx;
       if (ctx) {
         void usageController.refresh(ctx, undefined, { force: true });

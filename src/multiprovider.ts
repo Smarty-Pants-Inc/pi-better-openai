@@ -4,7 +4,9 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 // this event with a service object; without it everything here stays inert and
 // credential resolution keeps its standalone behavior.
 export const MULTIPROVIDER_SERVICE_EVENT = "pi-multiprovider:service";
+export const CHATGPT_PROVIDER_ID = "openai";
 export const CODEX_PROVIDER_ID = "openai-codex";
+export const CHATGPT_PROVIDER_IDS = [CHATGPT_PROVIDER_ID, CODEX_PROVIDER_ID] as const;
 
 export type MultiproviderActiveAccount = {
   id: string;

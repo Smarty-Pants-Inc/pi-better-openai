@@ -1,6 +1,7 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { getCodexCredentials } from "../src/codex-auth.ts";
 import {
+  CHATGPT_PROVIDER_ID,
   CODEX_PROVIDER_ID,
   getActiveMultiproviderService,
   isMultiproviderService,
@@ -79,7 +80,31 @@ test("prefers the multiprovider pinned account over registry credentials", async
     accountId: "acct_pooled",
     source: "multiprovider",
   });
-  expect(service.resolveActiveAccountAuth).toHaveBeenCalledWith(CODEX_PROVIDER_ID, ctx, undefined);
+  expect(service.resolveActiveAccountAuth).toHaveBeenCalledWith(
+    CHATGPT_PROVIDER_ID,
+    ctx,
+    undefined,
+  );
+  expect(ctx?.modelRegistry?.getApiKeyForProvider).not.toHaveBeenCalled();
+});
+
+test("falls back to the legacy pinned account when no openai pool resolves", async () => {
+  const service = fakeService(async () => undefined);
+  vi.mocked(service.resolveActiveAccountAuth).mockImplementation(async (providerId) =>
+    providerId === CODEX_PROVIDER_ID
+      ? { accessToken: codexJwt("acct_legacy_pool"), label: "Legacy" }
+      : undefined,
+  );
+  setActiveMultiproviderService(service);
+  const ctx = credentialContext();
+  expect(await getCodexCredentials(ctx)).toEqual({
+    accessToken: codexJwt("acct_legacy_pool"),
+    accountId: "acct_legacy_pool",
+    source: "multiprovider",
+  });
+  expect(
+    vi.mocked(service.resolveActiveAccountAuth).mock.calls.map(([provider]) => provider),
+  ).toEqual([CHATGPT_PROVIDER_ID, CODEX_PROVIDER_ID]);
   expect(ctx?.modelRegistry?.getApiKeyForProvider).not.toHaveBeenCalled();
 });
 
@@ -111,5 +136,5 @@ test("uses the registry path when pi-multiprovider is absent", async () => {
   const ctx = credentialContext();
   const credentials = await getCodexCredentials(ctx);
   expect(credentials?.source).toBe("modelRegistry");
-  expect(ctx?.modelRegistry?.getApiKeyForProvider).toHaveBeenCalledWith(CODEX_PROVIDER_ID);
+  expect(ctx?.modelRegistry?.getApiKeyForProvider).toHaveBeenCalledWith(CHATGPT_PROVIDER_ID);
 });
