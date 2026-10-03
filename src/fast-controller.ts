@@ -1,6 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ResolvedConfig, SupportedModel } from "./config.ts";
+import type { ResolvedConfig, ServiceTier, SupportedModel } from "./config.ts";
 import { isRecord } from "./config.ts";
+
+export const ULTRAFAST_NOTICE =
+  "Ultrafast uses 6x Standard token prices for API GPT-6 Astra (global/US only). Codex subscription access is not verified. Host cost estimates may exclude tier premiums.";
 
 export function currentModelKey(ctx: ExtensionContext): string {
   return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none";
@@ -12,6 +15,41 @@ export function supportsFast(ctx: ExtensionContext, supportedModels: SupportedMo
   return supportedModels.some(
     (model) => model.provider === current.provider && model.id === current.id,
   );
+}
+
+export function supportsUltrafast(ctx: ExtensionContext): boolean {
+  const model = ctx.model;
+  if (
+    model?.provider !== "openai" ||
+    model.id !== "gpt-6-astra" ||
+    model.api !== "openai-responses"
+  )
+    return false;
+  try {
+    const url = new URL(model.baseUrl);
+    return (
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      !url.port &&
+      ["api.openai.com", "us.api.openai.com"].includes(url.hostname) &&
+      /^\/v1\/?$/.test(url.pathname) &&
+      !url.search &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function supportsServiceTier(
+  ctx: ExtensionContext,
+  cfg: ResolvedConfig,
+  tier: ServiceTier,
+): boolean {
+  if (tier === "ultrafast") return supportsUltrafast(ctx);
+  if (tier === "fast") return supportsFast(ctx, cfg.supportedModels);
+  return ctx.model?.provider === "openai" || ctx.model?.provider === "openai-codex";
 }
 
 export function modelList(supportedModels: SupportedModel[]): string {
@@ -35,54 +73,80 @@ export function fastStateText(
 }
 
 export class FastController {
-  desiredActive = false;
+  desiredTier: ServiceTier = "standard";
   active = false;
+  private explicitSelection = false;
   private lastInjectedAt: number | undefined;
   private lastInjectedModel: string | undefined;
   private lastInjectedTier: string | undefined;
-  private readonly serviceTier: string;
 
-  constructor(serviceTier: string) {
-    this.serviceTier = serviceTier;
+  private readonly fastServiceTier: string;
+
+  constructor(fastServiceTier = "priority") {
+    this.fastServiceTier = fastServiceTier;
+  }
+
+  get desiredActive(): boolean {
+    return this.desiredTier !== "standard";
   }
 
   applyDesiredState(ctx: ExtensionContext, cfg: ResolvedConfig): void {
-    this.active = this.desiredActive && supportsFast(ctx, cfg.supportedModels);
+    this.active = this.desiredActive && supportsServiceTier(ctx, cfg, this.desiredTier);
   }
 
   initializeForSession(ctx: ExtensionContext, cfg: ResolvedConfig, flagActive: boolean): void {
-    this.desiredActive = cfg.persistState ? cfg.desiredActive : false;
-    if (flagActive) this.desiredActive = true;
+    this.desiredTier = cfg.persistState
+      ? (cfg.serviceTier ?? (cfg.desiredActive ? "fast" : "standard"))
+      : "standard";
+    this.explicitSelection = cfg.persistState && cfg.serviceTier !== undefined;
+    if (flagActive) {
+      this.desiredTier = "fast";
+      this.explicitSelection = true;
+    }
     this.applyDesiredState(ctx, cfg);
   }
 
   setDesired(ctx: ExtensionContext, cfg: ResolvedConfig, next: boolean): void {
-    this.desiredActive = next;
+    this.setTier(ctx, cfg, next ? "fast" : "standard");
+  }
+
+  setTier(ctx: ExtensionContext, cfg: ResolvedConfig, tier: ServiceTier): void {
+    this.desiredTier = tier;
+    this.explicitSelection = true;
     this.applyDesiredState(ctx, cfg);
   }
 
   stateText(ctx: ExtensionContext, cfg: ResolvedConfig): string {
+    if (this.desiredTier === "ultrafast") {
+      return this.active
+        ? `Ultrafast mode is on for ${currentModelKey(ctx)}. ${ULTRAFAST_NOTICE}`
+        : this.unsupportedRequestMessage(ctx, cfg);
+    }
     return fastStateText(ctx, this.desiredActive, this.active, cfg.supportedModels);
   }
 
   unsupportedRequestMessage(ctx: ExtensionContext, cfg: ResolvedConfig): string {
+    if (this.desiredTier === "ultrafast") {
+      return `Ultrafast requested, but inactive for ${currentModelKey(ctx)}. ${ULTRAFAST_NOTICE} No lower-tier fallback will be injected.`;
+    }
     return `Fast mode requested, but ${currentModelKey(ctx)} is unsupported. It will activate automatically when you switch to a supported model: ${modelList(cfg.supportedModels)}.`;
   }
 
   inactiveForModelMessage(ctx: ExtensionContext): string {
-    return `Fast mode inactive for unsupported model ${currentModelKey(ctx)}.`;
+    const name = this.desiredTier === "ultrafast" ? "Ultrafast" : "Fast";
+    return `${name} mode inactive for unsupported model ${currentModelKey(ctx)}.`;
   }
 
   settingsSummary(ctx: ExtensionContext, cfg: ResolvedConfig): string {
-    if (this.active) return "on";
-    if (this.desiredActive)
-      return supportsFast(ctx, cfg.supportedModels) ? "requested" : "requested inactive";
-    return "off";
+    return (
+      this.desiredTier +
+      (this.desiredActive && !supportsServiceTier(ctx, cfg, this.desiredTier) ? " (inactive)" : "")
+    );
   }
 
   statusSegment(ctx: ExtensionContext, cfg: ResolvedConfig): string | undefined {
-    return this.active && supportsFast(ctx, cfg.supportedModels)
-      ? `${ctx.model?.id ?? "model"} fast`
+    return this.active && supportsServiceTier(ctx, cfg, this.desiredTier)
+      ? `${ctx.model?.id ?? "model"} ${this.desiredTier}`
       : undefined;
   }
 
@@ -91,22 +155,33 @@ export class FastController {
     ctx: ExtensionContext,
     cfg: ResolvedConfig,
   ): unknown {
-    if (!this.active || !supportsFast(ctx, cfg.supportedModels) || !isRecord(event.payload))
+    if (!isRecord(event.payload) || !supportsServiceTier(ctx, cfg, this.desiredTier))
       return undefined;
+    if (typeof event.payload.model === "string" && event.payload.model !== ctx.model?.id)
+      return undefined;
+    if (this.desiredTier === "standard" && !this.explicitSelection) return undefined;
+    const tier =
+      this.desiredTier === "standard"
+        ? "default"
+        : this.desiredTier === "fast"
+          ? this.fastServiceTier
+          : "ultrafast";
     this.lastInjectedAt = Date.now();
     this.lastInjectedModel = currentModelKey(ctx);
-    this.lastInjectedTier = this.serviceTier;
-    return { ...event.payload, service_tier: this.serviceTier };
+    this.lastInjectedTier = tier;
+    return { ...event.payload, service_tier: tier };
   }
 
   debugLines(ctx: ExtensionContext, cfg: ResolvedConfig): string[] {
     return [
-      `Fast desired: ${this.desiredActive}`,
-      `Fast active: ${this.active}`,
+      `Requested service tier: ${this.desiredTier}`,
+      `Effective override: ${supportsServiceTier(ctx, cfg, this.desiredTier) ? (this.desiredTier === "standard" && !this.explicitSelection ? "none (provider default)" : this.desiredTier) : "inactive (unsupported)"}`,
       `Current model: ${currentModelKey(ctx)}`,
-      `Supported model: ${supportsFast(ctx, cfg.supportedModels)}`,
-      `Configured service_tier: ${this.serviceTier}`,
+      `Fast supported: ${supportsFast(ctx, cfg.supportedModels)}`,
+      `Ultrafast supported: ${supportsUltrafast(ctx)}`,
       `Last injected: ${this.lastInjectedAt ? `${new Date(this.lastInjectedAt).toLocaleTimeString()} (${this.lastInjectedModel}, ${this.lastInjectedTier})` : "never"}`,
+      "Injection records requests, not server-confirmed service tiers or billing.",
+      ULTRAFAST_NOTICE,
     ];
   }
 }

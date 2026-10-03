@@ -4,6 +4,13 @@ import { dirname, join } from "node:path";
 import { CONFIG_BASENAME, logPrefix } from "./identity.ts";
 import { piAgentDir } from "./paths.ts";
 
+export const SERVICE_TIERS = ["standard", "fast", "ultrafast"] as const;
+export type ServiceTier = (typeof SERVICE_TIERS)[number];
+
+export function isServiceTier(value: unknown): value is ServiceTier {
+  return typeof value === "string" && (SERVICE_TIERS as readonly string[]).includes(value);
+}
+
 export const FOOTER_MODES = ["replace", "status", "off"] as const;
 export const IMAGE_SAVE_MODES = ["none", "project", "global", "custom"] as const;
 export const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
@@ -31,7 +38,14 @@ export const PET_STATES = [
 export const DEFAULT_SUPPORTED_MODELS = [
   "openai/gpt-5.4",
   "openai/gpt-5.5",
+  "openai/gpt-6-astra",
+  "openai/gpt-6.1-sol",
+  "openai/gpt-6-sol",
+  "openai/gpt-6-luna",
   "openai-codex/gpt-6-astra",
+  "openai-codex/gpt-6.1-sol",
+  "openai-codex/gpt-6-sol",
+  "openai-codex/gpt-6-luna",
   "openai-codex/gpt-5.6-sol",
   "openai-codex/gpt-5.6-terra",
   "openai-codex/gpt-5.6-luna",
@@ -43,6 +57,16 @@ export const DEFAULT_SUPPORTED_MODELS = [
 // default list. Treat those exact snapshots as unset so later additions to
 // DEFAULT_SUPPORTED_MODELS (such as gpt-6-astra) reach existing installs.
 const LEGACY_SEEDED_SUPPORTED_MODELS: readonly (readonly string[])[] = [
+  [
+    "openai/gpt-5.4",
+    "openai/gpt-5.5",
+    "openai-codex/gpt-6-astra",
+    "openai-codex/gpt-5.6-sol",
+    "openai-codex/gpt-5.6-terra",
+    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-5.4",
+    "openai-codex/gpt-5.5",
+  ],
   ["openai/gpt-5.4", "openai/gpt-5.5", "openai-codex/gpt-5.4", "openai-codex/gpt-5.5"],
   [
     "openai/gpt-5.4",
@@ -117,7 +141,15 @@ export type PetConfig = {
   sizeCells?: number;
 };
 
+export type DecisionsConfig = {
+  enabled?: boolean;
+  model?: string;
+  timeoutMs?: number;
+};
+
 export interface ConfigFile {
+  serviceTier?: ServiceTier;
+  decisions?: DecisionsConfig;
   persistState?: boolean;
   notifyOnModelSwitch?: boolean;
   active?: boolean;
@@ -136,6 +168,8 @@ export interface SupportedModel {
 }
 
 export interface ResolvedConfig {
+  serviceTier?: ServiceTier;
+  decisions: Required<DecisionsConfig>;
   configPath: string;
   projectConfigPath: string;
   globalConfigPath: string;
@@ -203,7 +237,14 @@ export const DEFAULT_PET_CONFIG: Required<PetConfig> = {
   sizeCells: 10,
 };
 
+export const DEFAULT_DECISIONS_CONFIG: Required<DecisionsConfig> = {
+  enabled: false,
+  model: "",
+  timeoutMs: 10_000,
+};
+
 export const DEFAULT_CONFIG: ConfigFile = {
+  decisions: DEFAULT_DECISIONS_CONFIG,
   // supportedModels is intentionally omitted so generated config files never pin
   // the default list; resolution falls back to DEFAULT_SUPPORTED_MODELS live.
   persistState: true,
@@ -217,7 +258,14 @@ export const DEFAULT_CONFIG: ConfigFile = {
   pets: DEFAULT_PET_CONFIG,
 };
 
-export type SettingsOptionSection = "root" | "usage" | "footer" | "image" | "websearch" | "pets";
+export type SettingsOptionSection =
+  | "root"
+  | "usage"
+  | "footer"
+  | "image"
+  | "websearch"
+  | "decisions"
+  | "pets";
 
 export type SettingsValueContext = {
   petEmptyValue?: string;
@@ -240,13 +288,24 @@ const stringSetting = (rawValue: string): string => rawValue;
 
 export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   {
+    id: "serviceTier",
+    section: "root",
+    key: "serviceTier",
+    label: "Service tier",
+    currentValue: (cfg) => cfg.serviceTier ?? (cfg.desiredActive ? "fast" : "standard"),
+    values: SERVICE_TIERS,
+    description:
+      "Ultrafast explicitly opts into 6x Standard token prices for API Astra (global/US only). Codex subscription access is not verified. Host cost estimates may exclude tier premiums.",
+    parse: stringSetting,
+  },
+  {
     id: "persistState",
     section: "root",
     key: "persistState",
-    label: "Persist fast state",
+    label: "Persist service tier",
     currentValue: (cfg) => String(cfg.persistState),
     values: ["true", "false"],
-    description: "Remember fast-mode state across sessions.",
+    description: "Remember the selected service tier across sessions.",
     parse: booleanSetting,
   },
   {
@@ -559,7 +618,42 @@ export const PET_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   },
 ];
 
+export const DECISIONS_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
+  {
+    id: "decisions.enabled",
+    section: "decisions",
+    key: "enabled",
+    label: "Enable decisions",
+    values: ["true", "false"],
+    currentValue: (cfg) => String(cfg.decisions.enabled),
+    parse: booleanSetting,
+    description:
+      "Opt in to sending bounded state to the explicitly selected native classifier. No chat fallback or automatic actions.",
+  },
+  {
+    id: "decisions.model",
+    section: "decisions",
+    key: "model",
+    label: "Classifier model",
+    currentValue: (cfg) => cfg.decisions.model,
+    parse: stringSetting,
+    description:
+      "Select with /openai-decisions use provider/model. OpenAI requires a published native classifier; Jev can be selected explicitly today.",
+  },
+  {
+    id: "decisions.timeoutMs",
+    section: "decisions",
+    key: "timeoutMs",
+    label: "Decision timeout (ms)",
+    values: ["5000", "10000", "30000"],
+    currentValue: (cfg) => String(cfg.decisions.timeoutMs),
+    parse: numberSetting,
+    description: "Maximum decision request duration; no automatic retries.",
+  },
+];
+
 export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
+  ...DECISIONS_SETTING_DESCRIPTORS,
   ...FAST_SETTING_DESCRIPTORS,
   ...FOOTER_SETTING_DESCRIPTORS,
   ...USAGE_SETTING_DESCRIPTORS,
@@ -640,6 +734,23 @@ export function readConfig(path: string): ConfigFile | undefined {
   if (!existsSync(path)) return undefined;
   const parsed = readRawConfig(path);
   const config: ConfigFile = {};
+  if (isServiceTier(parsed.serviceTier)) config.serviceTier = parsed.serviceTier;
+  if (isRecord(parsed.decisions)) {
+    config.decisions = {};
+    if (Object.hasOwn(parsed.decisions, "enabled"))
+      config.decisions.enabled = parsed.decisions.enabled === true;
+    // Invalid explicit selections must not fall back to a different global provider.
+    if (Object.hasOwn(parsed.decisions, "model"))
+      config.decisions.model =
+        typeof parsed.decisions.model === "string" ? parsed.decisions.model.trim() : "";
+    if (
+      typeof parsed.decisions.timeoutMs === "number" &&
+      Number.isFinite(parsed.decisions.timeoutMs)
+    )
+      config.decisions.timeoutMs = parsed.decisions.timeoutMs;
+  } else if (Object.hasOwn(parsed, "decisions")) {
+    config.decisions = { enabled: false, model: "" };
+  }
   if (typeof parsed.persistState === "boolean") config.persistState = parsed.persistState;
   if (typeof parsed.notifyOnModelSwitch === "boolean")
     config.notifyOnModelSwitch = parsed.notifyOnModelSwitch;
@@ -748,6 +859,7 @@ export function readConfig(path: string): ConfigFile | undefined {
 }
 
 export type SettingPatchContext = SettingsValueContext & {
+  serviceTier?: ServiceTier;
   persistState?: boolean;
   active?: boolean;
   desiredActive?: boolean;
@@ -761,10 +873,14 @@ export function applySettingToRawConfig(
 ): Record<string, unknown> {
   const next: Record<string, unknown> = { ...current };
   const bool = rawValue === "true";
-  if (id === "fast.enabled") {
+  if (id === "fast.enabled" || id === "serviceTier") {
+    if (id === "serviceTier" && !isServiceTier(rawValue)) return next;
     if (context.persistState) {
-      next.active = context.active ?? bool;
-      next.desiredActive = context.desiredActive ?? bool;
+      const tier =
+        context.serviceTier ?? (isServiceTier(rawValue) ? rawValue : bool ? "fast" : "standard");
+      next.serviceTier = tier;
+      next.active = context.active ?? tier !== "standard";
+      next.desiredActive = context.desiredActive ?? tier !== "standard";
     }
   } else {
     const descriptor = SETTINGS_OPTION_BY_ID.get(id);
@@ -806,10 +922,37 @@ export function resolveConfig(cwd: string): ResolvedConfig {
   const projectConfig = readConfig(paths.project) ?? {};
   const merged = { ...DEFAULT_CONFIG, ...globalConfig, ...projectConfig };
   const selectedPath = projectConfigExists ? paths.project : paths.global;
-  const desiredActive = merged.desiredActive ?? merged.active ?? false;
+  // A project legacy boolean must also override a global explicit tier.
+  const stateConfig =
+    [projectConfig, globalConfig].find(
+      (cfg) =>
+        cfg.serviceTier !== undefined ||
+        cfg.desiredActive !== undefined ||
+        cfg.active !== undefined,
+    ) ?? {};
+  const serviceTier = stateConfig.serviceTier;
+  const desiredActive =
+    serviceTier !== undefined
+      ? serviceTier !== "standard"
+      : (stateConfig.desiredActive ?? stateConfig.active ?? false);
   const configuredSupportedModels = parseModels(merged.supportedModels);
 
   return {
+    serviceTier,
+    decisions: {
+      ...DEFAULT_DECISIONS_CONFIG,
+      ...globalConfig.decisions,
+      ...projectConfig.decisions,
+      timeoutMs: Math.max(
+        1000,
+        Math.min(
+          60_000,
+          projectConfig.decisions?.timeoutMs ??
+            globalConfig.decisions?.timeoutMs ??
+            DEFAULT_DECISIONS_CONFIG.timeoutMs,
+        ),
+      ),
+    },
     configPath: selectedPath,
     projectConfigPath: paths.project,
     globalConfigPath: paths.global,

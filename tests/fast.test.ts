@@ -4,11 +4,13 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import betterOpenAI from "../index.ts";
+import { configPaths, readRawConfig } from "../src/config.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
 type CommandHandler = (args: string, ctx: ExtensionContext) => unknown | Promise<unknown>;
 
 type Harness = {
+  pi: ExtensionAPI;
   ctx: ExtensionContext;
   handlers: Map<string, EventHandler[]>;
   commands: Map<string, { handler: CommandHandler }>;
@@ -47,7 +49,13 @@ function writeProjectConfig(cwd: string, overrides: Record<string, unknown> = {}
 }
 
 function createModel(provider: string, id: string) {
-  return { provider, id } as ExtensionContext["model"];
+  return {
+    provider,
+    id,
+    api: provider === "openai-codex" ? "openai-codex-responses" : "openai-responses",
+    baseUrl:
+      provider === "openai-codex" ? "https://chatgpt.com/backend-api" : "https://api.openai.com/v1",
+  } as ExtensionContext["model"];
 }
 
 function createHarness(cwd: string, model = createModel("openai", "gpt-5.5")): Harness {
@@ -97,7 +105,7 @@ function createHarness(cwd: string, model = createModel("openai", "gpt-5.5")): H
 
   betterOpenAI(pi);
 
-  return { ctx, handlers, commands };
+  return { pi, ctx, handlers, commands };
 }
 
 async function emit(harness: Harness, event: string, payload: unknown = {}): Promise<unknown[]> {
@@ -121,6 +129,153 @@ afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
     rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+describe("service tiers", () => {
+  test.each(["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"])(
+    "enables Fast by default for Codex %s",
+    async (id) => {
+      const cwd = createTempProject();
+      writeProjectConfig(cwd, { desiredActive: true, supportedModels: undefined });
+      const h = createHarness(cwd, createModel("openai-codex", id));
+      await emit(h, "session_start");
+      expect(await beforeProviderRequest(h, { model: id })).toEqual({
+        model: id,
+        service_tier: "priority",
+      });
+    },
+  );
+
+  test("selects and persists Ultrafast, discloses cost, and explicitly restores Standard", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, { unknown: "keep", serviceTier: "standard" });
+    const h = createHarness(cwd, createModel("openai", "gpt-6-astra"));
+    await emit(h, "session_start");
+    await h.commands.get("openai-tier")!.handler("ultrafast", h.ctx);
+    const payload = { model: "gpt-6-astra", service_tier: "priority", input: [] };
+    expect(await beforeProviderRequest(h, payload)).toEqual({
+      ...payload,
+      service_tier: "ultrafast",
+    });
+    expect(payload.service_tier).toBe("priority");
+    expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("6x Standard"), "warning");
+    expect(readRawConfig(configPaths(cwd).project)).toMatchObject({
+      serviceTier: "ultrafast",
+      unknown: "keep",
+    });
+    const resumed = createHarness(cwd, h.ctx.model);
+    await emit(resumed, "session_start");
+    expect(await beforeProviderRequest(resumed, payload)).toMatchObject({
+      service_tier: "ultrafast",
+    });
+    await h.commands.get("openai-tier")!.handler("standard", h.ctx);
+    expect(await beforeProviderRequest(h, payload)).toMatchObject({ service_tier: "default" });
+    expect(readRawConfig(configPaths(cwd).project)).toMatchObject({
+      serviceTier: "standard",
+      desiredActive: false,
+    });
+  });
+
+  test.each([
+    { provider: "openai-codex", id: "gpt-6-astra" },
+    { provider: "openai", id: "gpt-6.1-sol" },
+    { provider: "openai", id: "gpt-6-astra", baseUrl: "https://eu.api.openai.com/v1" },
+    { provider: "openai", id: "gpt-6-astra", baseUrl: "https://proxy.example/v1" },
+    { provider: "openai", id: "gpt-6-astra", baseUrl: "http://api.openai.com/v1" },
+    { provider: "openai", id: "gpt-6-astra", api: "openai-completions" },
+  ])(
+    "does not inject an unverified Ultrafast tier or silently downgrade: %j",
+    async (overrides) => {
+      const cwd = createTempProject();
+      writeProjectConfig(cwd, {
+        serviceTier: "ultrafast",
+        supportedModels: ["openai/gpt-6-astra", "openai-codex/gpt-6-astra", "openai/gpt-6.1-sol"],
+      });
+      const model = {
+        ...createModel(overrides.provider, overrides.id)!,
+        ...overrides,
+      } as NonNullable<ExtensionContext["model"]>;
+      const h = createHarness(cwd, model);
+      await emit(h, "session_start");
+      expect(await beforeProviderRequest(h, { model: model.id })).toBeUndefined();
+      expect(readRawConfig(configPaths(cwd).project).serviceTier).toBe("ultrafast");
+    },
+  );
+
+  test("rechecks capability on model switches and never injects into a different payload model", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, { serviceTier: "ultrafast" });
+    const h = createHarness(cwd, createModel("openai", "gpt-6-astra"));
+    await emit(h, "session_start");
+    expect(await beforeProviderRequest(h, { model: "gpt-6.1-sol" })).toBeUndefined();
+    h.ctx.model = createModel("openai-codex", "gpt-6-astra");
+    await emit(h, "model_select", { model: h.ctx.model });
+    expect(await beforeProviderRequest(h, { model: "gpt-6-astra" })).toBeUndefined();
+    h.ctx.model = {
+      ...createModel("openai", "gpt-6-astra")!,
+      baseUrl: "https://us.api.openai.com/v1/",
+    };
+    await emit(h, "model_select", { model: h.ctx.model });
+    expect(await beforeProviderRequest(h, { model: "gpt-6-astra" })).toMatchObject({
+      service_tier: "ultrafast",
+    });
+  });
+
+  test("persists a Fast flag override even when both old and new tiers are active", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, {
+      serviceTier: "ultrafast",
+      active: true,
+      desiredActive: true,
+      supportedModels: undefined,
+    });
+    const h = createHarness(cwd, createModel("openai", "gpt-6-astra"));
+    vi.mocked(h.pi.getFlag).mockReturnValue(true);
+    await emit(h, "session_start");
+    expect(await beforeProviderRequest(h, { model: "gpt-6-astra" })).toMatchObject({
+      service_tier: "priority",
+    });
+    expect(readRawConfig(configPaths(cwd).project).serviceTier).toBe("fast");
+  });
+
+  test("nonpersistent selection stays session-only and the Fast flag never selects Ultrafast", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, {
+      persistState: false,
+      serviceTier: "ultrafast",
+      supportedModels: undefined,
+    });
+    const h = createHarness(cwd, createModel("openai", "gpt-6-astra"));
+    await emit(h, "session_start");
+    expect(await beforeProviderRequest(h, { model: "gpt-6-astra" })).toBeUndefined();
+    await h.commands.get("openai-tier")!.handler("fast", h.ctx);
+    expect(await beforeProviderRequest(h, { model: "gpt-6-astra" })).toMatchObject({
+      service_tier: "priority",
+    });
+    expect(readRawConfig(configPaths(cwd).project).serviceTier).toBe("ultrafast");
+    const flagged = createHarness(cwd, h.ctx.model);
+    vi.mocked(flagged.pi.getFlag).mockReturnValue(true);
+    await emit(flagged, "session_start");
+    expect(await beforeProviderRequest(flagged, { model: "gpt-6-astra" })).toMatchObject({
+      service_tier: "priority",
+    });
+  });
+
+  test("/fast disables Ultrafast, then enables only Fast; invalid tiers do not change state", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, { serviceTier: "ultrafast", supportedModels: undefined });
+    const h = createHarness(cwd, createModel("openai", "gpt-6-astra"));
+    await emit(h, "session_start");
+    await h.commands.get("fast")!.handler("", h.ctx);
+    expect(await beforeProviderRequest(h, { model: "gpt-6-astra" })).toMatchObject({
+      service_tier: "default",
+    });
+    await h.commands.get("fast")!.handler("", h.ctx);
+    await h.commands.get("openai-tier")!.handler("turbo", h.ctx);
+    expect(await beforeProviderRequest(h, { model: "gpt-6-astra" })).toMatchObject({
+      service_tier: "priority",
+    });
+  });
 });
 
 describe("fast mode provider injection", () => {
