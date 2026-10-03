@@ -1,0 +1,274 @@
+{
+ "sessionFile": "2026-10-03T11-57-34-752Z_01a101a0-729f-76ad-8841-5ef4d378a262.jsonl",
+ "entries": [
+  {
+   "type": "session",
+   "id": "01a101a0-729f-76ad-8841-5ef4d378a262"
+  },
+  {
+   "role": "user",
+   "text": "The classifier is already selected with /openai-decisions. Call openai_decide exactly once with state {\"change\":\"README typo fix\",\"tests\":\"pass\"} and questions: route (choice: review or proceed), ready (bool), risk (score 1-5). Then list the typed answers."
+  },
+  {
+   "role": "assistant",
+   "provider": "cliproxyapi",
+   "model": "gpt-6-astra",
+   "stopReason": "toolUse",
+   "usage": {
+    "input": 1404,
+    "output": 158,
+    "cacheRead": 0,
+    "totalTokens": 1562
+   },
+   "text": "",
+   "toolCalls": [
+    {
+     "name": "openai_decide",
+     "arguments": {
+      "state": {
+       "change": "README typo fix",
+       "tests": "pass"
+      },
+      "questions": {
+       "route": {
+        "type": "choice",
+        "instructions": "Choose review or proceed for the change.",
+        "criteria": {
+         "review": "The change needs additional review.",
+         "proceed": "The change is ready to proceed."
+        }
+       },
+       "ready": {
+        "type": "bool",
+        "instructions": "Judge whether the change is ready.",
+        "criteria": {
+         "true": "The change is ready.",
+         "false": "The change is not ready."
+        }
+       },
+       "risk": {
+        "type": "score",
+        "instructions": "Rate change risk from 1 (lowest) to 5 (highest).",
+        "criteria": [
+         "1: Minimal risk.",
+         "2: Low risk.",
+         "3: Moderate risk.",
+         "4: High risk.",
+         "5: Very high risk."
+        ]
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "toolResult",
+   "toolName": "openai_decide",
+   "isError": false,
+   "text": "{\"status\":\"ok\",\"provider\":\"openrouter\",\"model\":\"~typesafe/jev-latest\",\"answers\":{\"route\":{\"type\":\"choice\",\"choice\":\"proceed\",\"confidence\":0.97,\"probabilities\":{\"review\":0.01,\"proceed\":0.99}},\"ready\":{\"type\":\"bool\",\"probability\":0.92},\"risk\":{\"type\":\"score\",\"score\":0,\"confidence\":1}}}",
+   "classifierUsage": {
+    "input": 457,
+    "output": 63,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "totalTokens": 520,
+    "cost": {
+     "input": 1.9194000000000003e-05,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "total": 1.9194000000000003e-05
+    }
+   }
+  },
+  {
+   "role": "assistant",
+   "provider": "cliproxyapi",
+   "model": "gpt-6-astra",
+   "stopReason": "stop",
+   "usage": {
+    "input": 379,
+    "output": 78,
+    "cacheRead": 1280,
+    "totalTokens": 1737
+   },
+   "text": "- **route (choice):** `proceed` \u2014 confidence `0.97`.\n- **ready (bool):** probability of true `0.92`; no explicit boolean returned.\n- **risk (score 1\u20135):** returned `0` \u2014 outside the requested range; needs clarification before interpretation.\n\nThese are classifier judgments, not authorization to act.",
+   "toolCalls": []
+  },
+  {
+   "role": "user",
+   "text": "The classifier is already selected with /openai-decisions. Call openai_decide exactly once with state {\"change\":\"README typo fix\",\"tests\":\"pass\"} and questions: route (choice: review or proceed), ready (bool), risk (score 1-5). Then list the typed answers."
+  },
+  {
+   "role": "assistant",
+   "provider": "cliproxyapi",
+   "model": "gpt-6-astra",
+   "stopReason": "toolUse",
+   "usage": {
+    "input": 268,
+    "output": 164,
+    "cacheRead": 1536,
+    "totalTokens": 1968
+   },
+   "text": "",
+   "toolCalls": [
+    {
+     "name": "openai_decide",
+     "arguments": {
+      "state": {
+       "change": "README typo fix",
+       "tests": "pass"
+      },
+      "questions": {
+       "route": {
+        "type": "choice",
+        "instructions": "Choose review or proceed for this change.",
+        "criteria": {
+         "review": "Additional review is needed.",
+         "proceed": "The change is ready to proceed."
+        }
+       },
+       "ready": {
+        "type": "bool",
+        "instructions": "Judge whether this change is ready.",
+        "criteria": {
+         "true": "The change is ready.",
+         "false": "The change is not ready."
+        }
+       },
+       "risk": {
+        "type": "score",
+        "instructions": "Rate risk on a scale of 1 to 5, where 1 is lowest and 5 is highest.",
+        "criteria": [
+         "1: Minimal risk.",
+         "2: Low risk.",
+         "3: Moderate risk.",
+         "4: High risk.",
+         "5: Very high risk."
+        ]
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "toolResult",
+   "toolName": "openai_decide",
+   "isError": true,
+   "text": "Decision provider failed. Check the selected provider's credentials and availability in Pi.",
+   "classifierUsage": null
+  },
+  {
+   "role": "assistant",
+   "provider": "cliproxyapi",
+   "model": "gpt-6-astra",
+   "stopReason": "stop",
+   "usage": {
+    "input": 332,
+    "output": 62,
+    "cacheRead": 1664,
+    "totalTokens": 2058
+   },
+   "text": "The single `openai_decide` call failed: check the selected provider\u2019s credentials and availability in Pi.\n\nNo typed answers were returned:\n- **route (choice):** unavailable\n- **ready (bool):** unavailable\n- **risk (score 1\u20135):** unavailable",
+   "toolCalls": []
+  },
+  {
+   "role": "user",
+   "text": "The classifier is already selected with /openai-decisions. Call openai_decide exactly once with state {\"change\":\"README typo fix\",\"tests\":\"pass\"} and questions: route (choice: review or proceed), ready (bool), risk (score 1-5). Then list the typed answers."
+  },
+  {
+   "role": "assistant",
+   "provider": "cliproxyapi",
+   "model": "gpt-6-astra",
+   "stopReason": "toolUse",
+   "usage": {
+    "input": 333,
+    "output": 156,
+    "cacheRead": 1792,
+    "totalTokens": 2281
+   },
+   "text": "",
+   "toolCalls": [
+    {
+     "name": "openai_decide",
+     "arguments": {
+      "state": {
+       "change": "README typo fix",
+       "tests": "pass"
+      },
+      "questions": {
+       "route": {
+        "type": "choice",
+        "instructions": "Choose review or proceed for this change.",
+        "criteria": {
+         "review": "Additional review is needed.",
+         "proceed": "The change is ready to proceed."
+        }
+       },
+       "ready": {
+        "type": "bool",
+        "instructions": "Judge whether this change is ready.",
+        "criteria": {
+         "true": "The change is ready.",
+         "false": "The change is not ready."
+        }
+       },
+       "risk": {
+        "type": "score",
+        "instructions": "Rate risk from 1 (lowest) to 5 (highest).",
+        "criteria": [
+         "1: Minimal risk.",
+         "2: Low risk.",
+         "3: Moderate risk.",
+         "4: High risk.",
+         "5: Very high risk."
+        ]
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "toolResult",
+   "toolName": "openai_decide",
+   "isError": true,
+   "text": "Decisions are disabled. Select a native classifier with /openai-decisions use provider/model to opt in.",
+   "classifierUsage": null
+  },
+  {
+   "role": "assistant",
+   "provider": "cliproxyapi",
+   "model": "gpt-6-astra",
+   "stopReason": "stop",
+   "usage": {
+    "input": 2316,
+    "output": 69,
+    "cacheRead": 0,
+    "totalTokens": 2385
+   },
+   "text": "The single `openai_decide` call reported that decisions are disabled. No typed answers were returned:\n\n- **route (choice):** unavailable\n- **ready (bool):** unavailable\n- **risk (score 1\u20135):** unavailable\n\nEnable the classifier with `/openai-decisions use provider/model`.",
+   "toolCalls": []
+  },
+  {
+   "role": "user",
+   "text": "Reply with one short line: tier check done."
+  },
+  {
+   "role": "assistant",
+   "provider": "cliproxyapi",
+   "model": "gpt-6-astra",
+   "stopReason": "stop",
+   "usage": {
+    "input": 2401,
+    "output": 8,
+    "cacheRead": 0,
+    "totalTokens": 2409
+   },
+   "text": "tier check done.",
+   "toolCalls": []
+  }
+ ]
+}

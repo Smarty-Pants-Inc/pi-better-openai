@@ -1,0 +1,18 @@
+{
+  "supportedModels": [
+    "cliproxyapi/gpt-6-astra"
+  ],
+  "usage": {
+    "enabled": false
+  },
+  "decisions": {
+    "enabled": false,
+    "model": "typesafe/jev-latest"
+  },
+  "active": false,
+  "desiredActive": false,
+  "serviceTier": "standard",
+  "footer": {
+    "mode": "replace"
+  }
+}
