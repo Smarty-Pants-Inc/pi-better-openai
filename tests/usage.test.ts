@@ -755,8 +755,8 @@ function fakeMultiproviderService() {
   type ChangedEvent = { providerId: string; account: unknown; ctx: ExtensionContext };
   type Auth = { accessToken: string; label: string; source?: string } | undefined;
   const listeners = new Map<(event: ChangedEvent) => void, string>();
-  let resolveAuth: () => Promise<Auth> = async () => undefined;
-  const resolveActiveAccountAuth = vi.fn(async () => resolveAuth());
+  let resolveAuth: (providerId: string) => Promise<Auth> = async () => undefined;
+  const resolveActiveAccountAuth = vi.fn(async (providerId: string) => resolveAuth(providerId));
   const value = {
     getActiveAccount: vi.fn(async () => undefined),
     resolveActiveAccountAuth,
@@ -768,7 +768,7 @@ function fakeMultiproviderService() {
   return {
     value,
     resolveActiveAccountAuth,
-    resolve(next: () => Promise<Auth>) {
+    resolve(next: (providerId: string) => Promise<Auth>) {
       resolveAuth = next;
     },
     notifyAccountChanged(event: ChangedEvent) {
@@ -793,7 +793,7 @@ function widgetLine(harness: UsageHarness): string {
 
 describe("multiprovider resume", () => {
   test.each(["openai", "openai-codex"])(
-    "repaints usage when a resumed session restores a %s account",
+    "uses the selected %s account after switch/resume with two distinct pools",
     async (providerId) => {
       // Usage is account-scoped: the upstream credential and the pooled account
       // report different numbers, so the widget line identifies who was charged.
@@ -823,7 +823,7 @@ describe("multiprovider resume", () => {
           showResetTimes: false,
         },
         model: {
-          provider: "openai-codex",
+          provider: providerId,
           id: "gpt-5.6-sol",
         } as unknown as ExtensionContext["model"],
         isUsingOAuth: true,
@@ -840,10 +840,10 @@ describe("multiprovider resume", () => {
       await vi.waitFor(() => expect(widgetLine(harness)).toContain("5h: 90%"));
 
       // The replay then restores the account and tells followers about it.
-      service.resolve(async () => ({
-        accessToken: codexJwt("acct_pinned"),
-        label: "Work",
-        source: "Work · Codex OAuth",
+      service.resolve(async (poolProviderId) => ({
+        accessToken: codexJwt(poolProviderId === providerId ? "acct_pinned" : "acct_other_pool"),
+        label: poolProviderId === providerId ? "Work" : "Other pool",
+        source: "Synthetic OAuth",
       }));
       service.notifyAccountChanged({
         providerId,
@@ -857,7 +857,7 @@ describe("multiprovider resume", () => {
         expect.any(Function),
       );
       expect(service.resolveActiveAccountAuth).toHaveBeenCalledWith(
-        "openai",
+        providerId,
         harness.ctx,
         expect.anything(),
       );
@@ -868,6 +868,18 @@ describe("multiprovider resume", () => {
             "acct_pinned",
         ),
       ).toBe(true);
+      const lastHeaders = fetchMock.mock.calls.at(-1)?.[1]?.headers;
+      expect(lastHeaders).toMatchObject({
+        authorization: `Bearer ${codexJwt("acct_pinned")}`,
+        "chatgpt-account-id": "acct_pinned",
+      });
+      expect(
+        fetchMock.mock.calls.some(
+          ([, init]) =>
+            ((init?.headers ?? {}) as Record<string, string>)["chatgpt-account-id"] ===
+            "acct_other_pool",
+        ),
+      ).toBe(false);
       await emit(harness, "session_shutdown");
     },
   );

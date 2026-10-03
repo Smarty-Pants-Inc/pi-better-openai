@@ -92,6 +92,34 @@ test("uses refreshed openai registry OAuth before legacy and auth-file credentia
   expect(getApiKeyForProvider.mock.calls).toEqual([["openai"]]);
 });
 
+test.each(["openai", "openai-codex"])(
+  "keeps the selected %s pool ahead of the other pool, registry, and auth file",
+  async (providerId) => {
+    writeAuth({ type: "oauth", access: jwt("acct_file") }, legacy);
+    const getApiKeyForProvider = vi.fn(async () => jwt("acct_registry"));
+    const resolveActiveAccountAuth = vi.fn(async (poolProviderId: string) => ({
+      accessToken: jwt(poolProviderId === providerId ? "acct_pinned" : "acct_other_pool"),
+      label: "Synthetic account",
+    }));
+    setActiveMultiproviderService({
+      getActiveAccount: vi.fn(async () => undefined),
+      resolveActiveAccountAuth,
+      onActiveAccountChanged: vi.fn(() => () => {}),
+    });
+    const ctx = {
+      model: { provider: providerId },
+      modelRegistry: { getApiKeyForProvider },
+    } as unknown as ExtensionContext;
+    expect(await getCodexCredentials(ctx)).toEqual({
+      accessToken: jwt("acct_pinned"),
+      accountId: "acct_pinned",
+      source: "multiprovider",
+    });
+    expect(resolveActiveAccountAuth.mock.calls).toEqual([[providerId, ctx, undefined]]);
+    expect(getApiKeyForProvider).not.toHaveBeenCalled();
+  },
+);
+
 test("does not continue to legacy resolution after a cancelled openai lookup", async () => {
   writeAuth(undefined);
   const getApiKeyForProvider = vi.fn(() => new Promise<string>(() => {}));

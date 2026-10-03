@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CHATGPT_PROVIDER_IDS, getActiveMultiproviderService } from "./multiprovider.ts";
+import {
+  CHATGPT_PROVIDER_IDS,
+  CODEX_PROVIDER_ID,
+  getActiveMultiproviderService,
+} from "./multiprovider.ts";
 import { piAgentDir } from "./paths.ts";
 
 export const AUTH_FILE = join(piAgentDir(), "auth.json");
@@ -136,7 +140,12 @@ export async function getCodexCredentials(
   // wins over pi's own credential: subscription usage is per-account.
   const multiprovider = getActiveMultiproviderService();
   if (multiprovider && ctx) {
-    for (const providerId of CHATGPT_PROVIDER_IDS) {
+    // Resolve the selected provider's session pin before the other pool's default.
+    const poolProviderIds =
+      ctx.model?.provider === CODEX_PROVIDER_ID
+        ? [CODEX_PROVIDER_ID, CHATGPT_PROVIDER_IDS[0]]
+        : CHATGPT_PROVIDER_IDS;
+    for (const providerId of poolProviderIds) {
       try {
         const resolved = await waitForSignal(
           multiprovider.resolveActiveAccountAuth(providerId, ctx, signal),
@@ -148,7 +157,7 @@ export async function getCodexCredentials(
         }
       } catch {
         if (signal?.aborted) throw signal.reason ?? new Error("Operation was aborted.");
-        // Try the legacy pool, then pi-owned credential resolution.
+        // Try the other pool, then pi-owned credential resolution.
       }
     }
   }
