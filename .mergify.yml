@@ -41,12 +41,16 @@ commands_restrictions:
       - or:
           - sender-permission >= write
           - sender = smarty-fleet-write[bot]
+          - sender = smarty-fleet-write-leads[bot]
+          - sender = smarty-fleet-write-lanes[bot]
   # The stuck-work check's R4 posts `@mergifyio refresh` as the write App (smarty-dev#868, #983).
   refresh:
     conditions:
       - or:
           - sender-permission >= write
           - sender = smarty-fleet-write[bot]
+          - sender = smarty-fleet-write-leads[bot]
+          - sender = smarty-fleet-write-lanes[bot]
 
 # Sanctioned front-of-queue route, as smarty-dev (#2004 T10; org for Paul 2026-10-02): a PR labelled p0 is
 # checked ahead of the rest of the queue.
