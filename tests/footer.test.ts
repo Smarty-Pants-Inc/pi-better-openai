@@ -196,6 +196,54 @@ describe("footer pet layout", () => {
 });
 
 describe("footer mode ownership", () => {
+  test.each(["replace", "status"] as const)(
+    "shows Ultrafast accurately in %s mode",
+    async (mode) => {
+      const cwd = createTempProject();
+      writeProjectConfig(cwd, mode, { persistState: true, serviceTier: "ultrafast" });
+      const h = createHarness(cwd);
+      h.ctx.model = {
+        provider: "openai",
+        id: "gpt-6-astra",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+      } as ExtensionContext["model"];
+      await emit(h, "session_start");
+      const theme = { fg: (_color: string, value: string) => value };
+      const display =
+        mode === "replace"
+          ? h.setFooter.mock.calls[0]![0]({ requestRender: vi.fn() }, theme, {})
+          : h.setWidget.mock.calls[0]![1]({}, theme);
+      expect(display.render(100).map(stripAnsi).join("\n")).toContain("gpt-6-astra ultrafast");
+      display.dispose?.();
+    },
+  );
+
+  test("counts decision tool usage on turns and when reconstructing session totals", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, "replace");
+    const h = createHarness(cwd);
+    await emit(h, "session_start");
+    const usage = { input: 24, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.125 } };
+    const assistant = { role: "assistant", usage };
+    const decision = { role: "toolResult", toolName: "openai_decide", usage };
+    const display = h.setFooter.mock.calls[0]![0](
+      { requestRender: vi.fn() },
+      { fg: (_color: string, value: string) => value },
+      {},
+    );
+    await emit(h, "turn_end", { message: assistant, toolResults: [decision] });
+    expect(display.render(100).join("\n")).toContain("↑48 $0.250");
+    expect(display.render(100).join("\n")).toContain("$0.250");
+    h.getEntries.mockReturnValue([
+      { type: "message", message: assistant },
+      { type: "message", message: decision },
+    ]);
+    await emit(h, "session_tree");
+    expect(display.render(100).join("\n")).toContain("$0.250");
+    display.dispose();
+  });
   test("reuses context usage between renders and invalidates it on message changes", async () => {
     const cwd = createTempProject();
     writeProjectConfig(cwd, "replace");
