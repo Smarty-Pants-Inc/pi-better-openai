@@ -1,0 +1,16 @@
+ OpenAI native Decisions requires a published classifier adapter in Pi; no endpoint is guessed.
+ Warning: Decisions enabled for openrouter/inception/mercury-decide:free. Submitted state is sent to that provider and billed there. No automatic actions or
+ provider fallback.
+ Decisions: disabled; model: openrouter/inception/mercury-decide:free; timeout: 10000ms.
+ /openai-decisions models | use provider/model | off
+ OpenAI native Decisions requires a published classifier adapter in Pi; no endpoint is guessed.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/tmp/pbolive-priv.gchkgf/cwd28
+0.0%/1.0M (auto)                                                                                                                             openai/gpt-4.1-nano
+
+## after use openrouter/inception/mercury-decide:free then /openai-decisions off; command: same decide command; exit=0
+ASSISTANT openrouter openai/gpt-4.1-mini stop=toolUse usage={"input": 718, "output": 92, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0, "totalTokens": 810, "cost": {"input": 0.00028720000000000004, "output": 0.0001472, "cacheRead": 0, "cacheWrite": 0, "total": 0.00043440000000000004}} text='' 
+TOOL_CALL openai_decide {"state": {"ticket": "The login page shows a blank white screen after the latest deploy."}, "questions": {"category": {"type": "choice", "instructions": "Classify the ticket.", "criteria": {"bug": "A software defect", "feature": "A request for new functionality"}}, "urgent": {"type": "bool", "instructions": "Are users blocked?", "criteria": {"true": "Users are blocked", "false": "Users are not blocked"}}}}
+TOOL_RESULT isError=True {"content": [{"type": "text", "text": "Decisions are disabled. Select a native classifier with /openai-decisions use provider/model to opt in."}], "details": {"status": "error", "error": "Decisions are disabled. Select a native classifier with /openai-decisions use provider/model to opt in."}, "structuredContent": {"status": "error", "error": "Decisions are disabled. Select a native classifier with /openai-decisions use provider/model to opt in."}, "isError": true}
+ASSISTANT openrouter openai/gpt-4.1-mini stop=stop usage={"input": 839, "output": 24, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0, "totalTokens": 863, "cost": {"input": 0.0003356, "output": 3.8400000000000005e-05, "cacheRead": 0, "cacheWrite": 0, "total": 0.00037400000000000004}} text='Decisions are disabled. Please enable a native classifier with /openai-decisions use provider/model to proceed.' 

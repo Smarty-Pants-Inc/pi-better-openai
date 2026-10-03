@@ -1,0 +1,8 @@
+command: PI_CODING_AGENT_DIR=<fresh dir, no auth.json, decisions config copied> pi ... --model openrouter/openai/gpt-4.1-mini --tools openai_decide --mode json -p <decide prompt>
+exit=1
+stderr:
+No API key found for openrouter.
+
+Use /login to log into a provider via OAuth or API key. See:
+  /tmp/factory-repair-mvVR/pbolive.Ushz/p28/node_modules/@earendil-works/pi-coding-agent/docs/providers.md
+  /tmp/factory-repair-mvVR/pbolive.Ushz/p28/node_modules/@earendil-works/pi-coding-agent/docs/models.md

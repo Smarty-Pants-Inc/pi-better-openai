@@ -1,0 +1,6 @@
+ Warning: Decisions enabled for openrouter/respan/span-01-lite:free. Submitted state is sent to that provider and billed there. No automatic actions or
+ provider fallback.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/tmp/pbolive-priv.gchkgf/cwd28
+0.0%/1.0M (auto)                                                                                                                             openai/gpt-4.1-nano

@@ -1,0 +1,8 @@
+ Warning: tmux extended-keys is off. Modified Enter keys may not work. Add `set -g extended-keys on` to ~/.tmux.conf and restart tmux.
+ Decisions: disabled; model: not selected; timeout: 10000ms.
+ /openai-decisions models | use provider/model | off
+ OpenAI native Decisions requires a published classifier adapter in Pi; no endpoint is guessed.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/tmp/pbolive-priv.gchkgf/cwd28
+0.0%/1.0M (auto)                                                                                                                             openai/gpt-4.1-nano

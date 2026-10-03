@@ -1,0 +1,9 @@
+Checkout: p28 = 67178c7 (PR #28 head). bun install --frozen-lockfile -> exit 0 (183 packages).
+CLI: p28/node_modules/.bin/pi --version -> 1.0.0. Extension loaded with -ne -e p28/index.ts (startup lists [Extensions] p28).
+Agent dir: PI_CODING_AGENT_DIR=<private mktemp -d>; auth.json copied from ~/.pi/agent/auth.json with cp, chmod 600. Its only entry is an
+  openrouter api_key (no ChatGPT/Codex login), so the classifier and the chat driver both authenticate through OpenRouter; no other credential.
+  No OPENROUTER_/OPENAI_/TYPESAFE_ environment variables were set (count check = 0).
+TUI: logs/run28.sh in tmux 160x50 (regular TUI mode), used for /openai-decisions commands (README "Typed decisions").
+Tool runs: logs/decide28.sh = pi ... --model openrouter/openai/gpt-4.1-mini --tools openai_decide --mode json -p "<call openai_decide with
+  a choice question (bug/feature) and a bool question (urgent)>"; raw JSONL stayed private; logs/summ.py extracted tool call/result/usage.
+Selected classifier: openrouter/inception/mercury-decide:free (catalog classifier; $0). Chat driver cost: ~$0.0008 per run (gpt-4.1-mini via OpenRouter).
