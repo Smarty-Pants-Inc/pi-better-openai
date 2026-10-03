@@ -128,7 +128,9 @@ async function getCredentials(
 ): Promise<CodexImageCredentials> {
   const credentials = await getCodexCredentials(ctx, signal);
   if (credentials) return credentials;
-  throw new Error("Missing openai-codex OAuth credentials. Run /login openai-codex.");
+  throw new Error(
+    "Missing ChatGPT OAuth credentials. Run /login openai and choose Sign in with ChatGPT.",
+  );
 }
 
 function resolveModel(params: Pick<ToolParams, "model">, cfg: ResolvedConfig): string {

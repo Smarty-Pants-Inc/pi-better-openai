@@ -126,7 +126,16 @@ describe("OpenAI Codex model registration", () => {
 
     expect(registerProvider).toHaveBeenCalledOnce();
     expect(registerProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "openai-codex", name: "OpenAI Codex" }),
+      expect.objectContaining({
+        id: "openai-codex",
+        name: "OpenAI Codex (legacy)",
+        baseUrl: "https://chatgpt.com/backend-api",
+        auth: expect.objectContaining({
+          oauth: expect.objectContaining({ isSubscription: true }),
+        }),
+        stream: expect.any(Function),
+        streamSimple: expect.any(Function),
+      }),
     );
   });
 });

@@ -439,7 +439,7 @@ describe("openai_websearch tool execution", () => {
     const harness = createWebsearchHarness({ registryCredentials: undefined });
 
     const error = await rejectedError(executeSearch(harness, { query: "effect" }));
-    expect(error.message).toContain("/login openai-codex");
+    expect(error.message).toContain("/login openai and choose Sign in with ChatGPT");
     expect(fetchMock).not.toHaveBeenCalled();
 
     const debug = await harness.getDebug(harness.ctx);
@@ -453,6 +453,7 @@ describe("openai_websearch tool execution", () => {
 
     const error = await rejectedError(executeSearch(harness, { query: "effect" }));
     expect(error.message).toContain("authentication failed (HTTP 401)");
+    expect(error.message).toContain("/login openai and choose Sign in with ChatGPT");
     expect(error.message).not.toContain("test-access");
     expect(error.message).not.toContain("acct_test");
     expect(error.message).not.toContain("upstream details");

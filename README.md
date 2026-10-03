@@ -1,10 +1,10 @@
 # pi-better-openai
 
-A pi extension for OpenAI subscription workflows: fast mode, usage visibility, footer polish, custom Codex pets, and image generation through `openai-codex` auth.
+A pi extension for OpenAI subscription workflows: fast mode, usage visibility, footer polish, custom Codex pets, and image generation through ChatGPT OAuth.
 
 ## Install
 
-Requires Node.js 22.19.0 or newer.
+Requires pi 1.x and Node.js 22.19.0 or newer.
 
 Install from GitHub:
 
@@ -20,13 +20,13 @@ pi install npm:@monotykamary/pi-better-openai
 
 ## Authentication
 
-Usage display and image generation require pi's `openai-codex` OAuth credentials.
+Usage display, image generation, and web search require pi's ChatGPT OAuth credentials. The extension preserves credential-source priority: the pinned pooled account, refreshed model-registry auth, then unexpired auth-file entries. Within each source it tries `openai` first, falling back to legacy `openai-codex` credentials; API keys are not subscription credentials.
 
-1. In pi, run `/login openai-codex`.
+1. In pi, run `/login openai` and choose **Sign in with ChatGPT**.
 2. Verify subscription usage with `/openai-usage`, or open `/openai-settings` and check **Diagnostics**.
 3. The extension reads auth from pi's agent auth store, normally `~/.pi/agent/auth.json`. Do not copy, paste, or commit values from this file.
 4. If `PI_CODING_AGENT_DIR` is set, the auth store, global extension config, and global generated-image directory use that agent directory instead of `~/.pi/agent`. A leading `~/` is expanded to your home directory.
-5. When [pi-multiprovider](https://github.com/monotykamary/pi-multiprovider) 0.8.0+ pools several `openai-codex` accounts, the session's active account (chosen with `/switch-account`) is resolved first for usage display, image generation, and web search; the usage widget refreshes on every switch and whenever a resumed session restores the account, so it never keeps billing the account the session used before. Without that extension, credential resolution is unchanged.
+5. When [pi-multiprovider](https://github.com/monotykamary/pi-multiprovider) 0.8.0+ pools ChatGPT accounts under `openai` or legacy `openai-codex`, the session's active account (chosen with `/switch-account`) is resolved first for usage display, image generation, and web search; the usage widget refreshes on every switch and whenever a resumed session restores the account, so it never keeps billing the account the session used before. Without that extension, credential resolution is unchanged.
 
 ## Features
 
@@ -46,6 +46,14 @@ Usage display and image generation require pi's `openai-codex` OAuth credentials
   - `/openai-usage` shows current OpenAI subscription usage.
   - `/openai-resets` inspects and manually redeems a banked Codex reset.
   - `/openai-settings` opens settings, diagnostics, and config details.
+
+## Pi 1.0 compatibility
+
+Pi 1.0 uses fullscreen TUI by default. The pet footer continues to use `ctx.ui.setFooter()` and the injected `tui.requestRender()`; image messages use pi's `Image` component, so the host owns fullscreen positioning and image redraws. Regular TUI and text-only image fallbacks remain supported. Upstream fullscreen mode disables iTerm2 inline images, so those terminals receive the host's text fallback; Kitty images retain redraw and resize support.
+
+Pi 1.0 also exposes upstream `generateImages()` through the model registry. This overlaps with `openai_image` and `/openai-image`, but these remain available: they provide the standalone Codex Images API route, local edit/reference inputs, workspace-contained saving, and the extension's image message renderer. No tool or command is removed.
+
+The built-in MCP, codemode, and tool-search extensions now load by default. This extension does not change that loadout. `--no-extensions` also disables those built-ins; explicitly requested extension paths remain loadable.
 
 ## Banked resets
 

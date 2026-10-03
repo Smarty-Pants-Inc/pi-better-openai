@@ -97,7 +97,7 @@ type SearchRoute = {
 /**
  * With websearch.provider set, search goes through that pi provider (for example a
  * CLIProxyAPI gateway) with its base URL and API key, resolved by resolveProviderRoute.
- * The gateway owns ChatGPT OAuth and account selection. Unset keeps openai-codex OAuth.
+ * The gateway owns ChatGPT OAuth and account selection. Unset uses ChatGPT OAuth (openai first, then legacy openai-codex).
  */
 async function resolveSearchRoute(
   ctx: ExtensionContext,
@@ -110,7 +110,7 @@ async function resolveSearchRoute(
     if (credentials) return { url: CODEX_SEARCH_URL, credentials };
     throw new WebSearchError(
       "authentication_required",
-      "Missing openai-codex OAuth credentials. Run /login openai-codex, or set websearch.provider.",
+      "Missing ChatGPT OAuth credentials. Run /login openai and choose Sign in with ChatGPT, or set websearch.provider.",
     );
   }
   let route: ReturnType<typeof resolveProviderRoute>;
@@ -342,7 +342,7 @@ async function requestWebSearch(
         "authentication_failed",
         route.provider
           ? `Web search authentication failed at provider "${route.provider}" (HTTP ${response.status}). Check its API key in pi.`
-          : `ChatGPT web search authentication failed (HTTP ${response.status}). Reconnect with /login openai-codex.`,
+          : `ChatGPT web search authentication failed (HTTP ${response.status}). Reconnect with /login openai and choose Sign in with ChatGPT.`,
       );
     }
     throw new WebSearchError(
