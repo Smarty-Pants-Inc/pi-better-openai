@@ -1,4 +1,5 @@
 import {
+  DEFAULT_DECISIONS_CONFIG,
   DEFAULT_FOOTER_CONFIG,
   DEFAULT_IMAGE_CONFIG,
   DEFAULT_PET_CONFIG,
@@ -19,6 +20,7 @@ export function makeResolvedConfig(overrides: Partial<ResolvedConfig> = {}): Res
     active: false,
     desiredActive: false,
     supportedModels: [],
+    decisions: DEFAULT_DECISIONS_CONFIG,
     usage: DEFAULT_USAGE_CONFIG,
     footer: DEFAULT_FOOTER_CONFIG,
     image: DEFAULT_IMAGE_CONFIG,
