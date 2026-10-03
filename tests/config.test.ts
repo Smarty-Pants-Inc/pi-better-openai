@@ -58,7 +58,14 @@ describe("config helpers", () => {
     expect(_test.DEFAULT_SUPPORTED_MODELS).toEqual([
       "openai/gpt-5.4",
       "openai/gpt-5.5",
+      "openai/gpt-6-astra",
+      "openai/gpt-6.1-sol",
+      "openai/gpt-6-sol",
+      "openai/gpt-6-luna",
       "openai-codex/gpt-6-astra",
+      "openai-codex/gpt-6.1-sol",
+      "openai-codex/gpt-6-sol",
+      "openai-codex/gpt-6-luna",
       "openai-codex/gpt-5.6-sol",
       "openai-codex/gpt-5.6-terra",
       "openai-codex/gpt-5.6-luna",
@@ -94,6 +101,16 @@ describe("config helpers", () => {
 
   test("migrates legacy seeded supported model snapshots to current defaults", () => {
     const legacySnapshots = [
+      [
+        "openai/gpt-5.4",
+        "openai/gpt-5.5",
+        "openai-codex/gpt-6-astra",
+        "openai-codex/gpt-5.6-sol",
+        "openai-codex/gpt-5.6-terra",
+        "openai-codex/gpt-5.6-luna",
+        "openai-codex/gpt-5.4",
+        "openai-codex/gpt-5.5",
+      ],
       ["openai/gpt-5.4", "openai/gpt-5.5", "openai-codex/gpt-5.4", "openai-codex/gpt-5.5"],
       [
         "openai/gpt-5.4",
@@ -129,6 +146,73 @@ describe("config helpers", () => {
           expect(resolved.supportedModels.some((model) => model.id === "gpt-6-astra")).toBe(true);
         }
       });
+    });
+  });
+
+  test("resolves explicit tiers, legacy state precedence, and safe decision defaults", () => {
+    withTempDir((dir) =>
+      withHome(join(dir, "home"), () => {
+        const cwd = join(dir, "project");
+        const paths = _test.configPaths(cwd);
+        writeConfig(paths.global, {
+          serviceTier: "ultrafast",
+          decisions: { enabled: true, model: "typesafe/jev-latest", timeoutMs: 90000 },
+        });
+        expect(_test.resolveConfig(cwd)).toMatchObject({
+          serviceTier: "ultrafast",
+          desiredActive: true,
+          decisions: { timeoutMs: 60000 },
+        });
+        writeConfig(paths.project, {
+          desiredActive: false,
+          decisions: { enabled: false, timeoutMs: -1 },
+        });
+        expect(_test.resolveConfig(cwd)).toMatchObject({
+          serviceTier: undefined,
+          desiredActive: false,
+          decisions: { enabled: false, model: "typesafe/jev-latest", timeoutMs: 1000 },
+        });
+        writeConfig(paths.project, {
+          serviceTier: "standard",
+          desiredActive: true,
+          decisions: { model: "" },
+        });
+        expect(_test.resolveConfig(cwd)).toMatchObject({
+          serviceTier: "standard",
+          desiredActive: false,
+          decisions: { model: "" },
+        });
+        writeConfig(paths.project, {
+          serviceTier: "turbo",
+          decisions: { model: "invalid", timeoutMs: "oops" },
+        });
+        expect(readConfig(paths.project)).toEqual({ decisions: { model: "invalid" } });
+        expect(_test.resolveConfig(cwd).decisions.model).toBe("invalid");
+        writeConfig(paths.project, { decisions: { model: 42, enabled: "true" } });
+        expect(_test.resolveConfig(cwd).decisions).toMatchObject({ model: "", enabled: false });
+        writeConfig(paths.project, { decisions: null });
+        expect(_test.resolveConfig(cwd).decisions).toMatchObject({ model: "", enabled: false });
+      }),
+    );
+  });
+
+  test("tier and decision settings preserve unknown fields and honor persistence", () => {
+    const raw = { unknown: true, decisions: { unknown: "keep" }, serviceTier: "fast" };
+    expect(
+      applySettingToRawConfig(raw, "serviceTier", "ultrafast", { persistState: false }),
+    ).toEqual(raw);
+    expect(
+      applySettingToRawConfig(raw, "serviceTier", "ultrafast", { persistState: true }),
+    ).toMatchObject({ unknown: true, serviceTier: "ultrafast", desiredActive: true });
+    expect(applySettingToRawConfig(raw, "serviceTier", "bogus", { persistState: true })).toEqual(
+      raw,
+    );
+    expect(
+      applySettingToRawConfig(raw, "fast.enabled", "false", { persistState: true }),
+    ).toMatchObject({ serviceTier: "standard", desiredActive: false });
+    expect(applySettingToRawConfig(raw, "decisions.enabled", "true").decisions).toEqual({
+      unknown: "keep",
+      enabled: true,
     });
   });
 
