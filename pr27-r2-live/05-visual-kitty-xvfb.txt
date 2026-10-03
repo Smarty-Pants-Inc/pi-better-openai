@@ -1,0 +1,15 @@
+Terminal: kitty 0.49.2 (official x86_64 tarball from github.com/kovidgoyal/kitty releases, unpacked into a private mktemp -d;
+  missing X libs libXcursor1, libxkbcommon-x11-0, liblcms2-2, libxcb-xkb1 (+deps) fetched with `apt-get download` and extracted
+  with dpkg-deb -x into the same private dir; no sudo, nothing installed system-wide).
+Display: Xvfb :77 -screen 0 1600x1000x24 -fbdir <private> -nolisten tcp ; screenshots = Xvfb framebuffer (XWD) converted to PNG by logs/xwd2png.py.
+Pi: logs/run27k.sh (PI_IMAGE_PROTOCOL=kitty, CODEX_HOME=<private> with one synthetic valid pet "testblob":
+  pet.json + 1536x1872 lossless spritesheet.webp = 8x9 cells of 192x208, generated with sharp; there are no pet assets on this host).
+Input via kitty remote control (kitten @ send-text / resize-os-window).
+
+shot-00-start.png                 Pi 1.0 TUI in kitty, extension p27 loaded.
+shot-01-pet-before-resize.png     `/pets wake testblob` -> "Rendering Test Blob in the Better OpenAI footer."; pet drawn via kitty graphics protocol (1200x700 window).
+shot-02-image-cmd-before-resize.png `/openai-image a small red apple on a white table` -> "Missing ChatGPT OAuth credentials. Run /login openai and choose Sign in with ChatGPT." (pet still rendered)
+shot-03-after-shrink.png          resize-os-window 800x500 (exit 0): text reflowed, footer and pet re-anchored at the new right edge, no stale image.
+shot-04-after-grow.png            resize-os-window 1500x900 (exit 0): footer and pet redrawn at the new bottom-right, no ghost copies.
+Not shown: a GENERATED image next to the pet - image generation needs a ChatGPT login that the permitted credential lacks.
+All processes (kitty PID, Xvfb PID) were stopped with kill <recorded PID>.

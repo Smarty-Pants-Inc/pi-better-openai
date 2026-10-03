@@ -1,0 +1,7 @@
+  p27
+ Warning: tmux extended-keys is off. Modified Enter keys may not work. Add `set -g extended-keys on` to ~/.tmux.conf and restart tmux.
+ Warning: Usage hidden: current model is not an OpenAI subscription model.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/tmp/pbolive-priv.gchkgf/cwd27
+0.0%/272k (auto)                                                                                                                                gpt-5.5 • medium

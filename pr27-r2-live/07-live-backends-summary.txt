@@ -1,0 +1,18 @@
+Live backend attempts with the permitted credential (tmux 160x50, PI_IMAGE_PROTOCOL=none). Pi kept running after each command (no crash).
+== 01-openai-usage
+  p27
+ Warning: Usage hidden: current model is not an OpenAI subscription model.
+/tmp/pbolive-priv.gchkgf/cwd27
+0.0%/272k (auto)                                                                                                                                gpt-5.5 • medium
+== 02-openai-image
+ Warning: Usage hidden: current model is not an OpenAI subscription model.
+ Requesting OpenAI image...
+ Extension "command:openai-image" error: Missing ChatGPT OAuth credentials. Run /login openai and choose Sign in with ChatGPT.
+/tmp/pbolive-priv.gchkgf/cwd27
+0.0%/272k (auto)                                                                                                                                gpt-5.5 • medium
+== 03-openai-websearch
+ Extension "command:openai-image" error: Missing ChatGPT OAuth credentials. Run /login openai and choose Sign in with ChatGPT.
+ Searching the web via ChatGPT...
+ Extension "command:openai-websearch" error: Missing ChatGPT OAuth credentials. Run /login openai and choose Sign in with ChatGPT, or set websearch.provider.
+/tmp/pbolive-priv.gchkgf/cwd27
+0.0%/272k (auto)                                                                                                                                gpt-5.5 • medium
