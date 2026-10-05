@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getCodexCredentials } from "./codex-auth.ts";
+import { CODEX_AUTH_REQUIRED, getCodexCredentials } from "./codex-auth.ts";
 import { sanitizeDiagnosticError } from "./format.ts";
 import { reserveBankedResetRedemption } from "./reset-guard.ts";
 import {
@@ -91,7 +91,7 @@ export class ResetController {
           this.cache = { credits, updatedAt: Date.now() };
           this.error = undefined;
         } else {
-          this.error = "OpenAI Codex credentials unavailable.";
+          this.error = CODEX_AUTH_REQUIRED;
         }
       } catch (error) {
         if (generation !== this.generation || signal.aborted) return;
@@ -130,7 +130,7 @@ export class ResetController {
       const signal = this.requestSignal(ctx);
       const credentials = await getCodexCredentials(ctx, signal);
       signal.throwIfAborted();
-      if (!credentials) throw new Error("OpenAI Codex credentials unavailable.");
+      if (!credentials) throw new Error(CODEX_AUTH_REQUIRED);
       if (!reserveBankedResetRedemption(credentials.accountId, creditId))
         throw new Error(
           "A banked reset was already attempted recently; no additional credit was spent.",

@@ -14,6 +14,7 @@ import {
   usageSegments,
 } from "./usage.ts";
 import { currentModelKey } from "./fast-controller.ts";
+import { CODEX_AUTH_REQUIRED } from "./codex-auth.ts";
 
 export function isOpenAISubscriptionModel(
   ctx: ExtensionContext,
@@ -77,13 +78,19 @@ export class UsageController {
     cfg = this.getConfig(ctx),
     isUsingOAuth?: boolean,
   ): UsageSegment[] | undefined {
-    return this.usageSnapshot &&
-      !this.usageError &&
-      this.usageSnapshot.scope === usageScopeForModel(ctx.model?.id) &&
-      cfg.usage.enabled &&
-      isOpenAISubscriptionModel(ctx, cfg, isUsingOAuth)
-      ? usageSegments(this.usageSnapshot, cfg.usage)
-      : undefined;
+    if (
+      !this.usageSnapshot ||
+      this.usageError ||
+      this.usageSnapshot.scope !== usageScopeForModel(ctx.model?.id) ||
+      !cfg.usage.enabled ||
+      !isOpenAISubscriptionModel(ctx, cfg, isUsingOAuth)
+    )
+      return undefined;
+    const segments = usageSegments(this.usageSnapshot, cfg.usage);
+    // The new OpenAI subscription login and the Codex backend login are independent.
+    // Never present a separately authenticated Codex account as the active OpenAI quota.
+    if (ctx.model?.provider === "openai") segments.unshift({ text: "Codex ", severity: "muted" });
+    return segments;
   }
 
   statusLine(
@@ -108,7 +115,11 @@ export class UsageController {
       this.usageUpdatedAt && Date.now() - this.usageUpdatedAt > cfg.usage.refreshIntervalMs * 2
         ? ` · stale ${formatResetCountdown((Date.now() - this.usageUpdatedAt) / 1000)}`
         : "";
-    return `${formatUsageSnapshot(this.usageSnapshot, cfg.usage)}${stale}`;
+    const source =
+      ctx.model?.provider === "openai"
+        ? "Codex account (not verified against the active OpenAI login; OpenAI usage: https://chatgpt.com/settings/usage). "
+        : "";
+    return `${source}${formatUsageSnapshot(this.usageSnapshot, cfg.usage)}${stale}`;
   }
 
   formatDebug(ctx: ExtensionContext): string {
@@ -119,6 +130,7 @@ export class UsageController {
       `Current model: ${currentModelKey(ctx)}`,
       `Current model eligible: ${isOpenAISubscriptionModel(ctx, cfg)}`,
       `Requires subscription model: ${cfg.usage.showOnlyOnSubscriptionModels}`,
+      "Credential provider: openai-codex (independent of /login openai)",
       `Auth: ${auth ? "found" : "missing"}`,
       `Account ID: ${maskIdentifier(auth?.accountId) ?? "none"}`,
       `Last fetch: ${this.usageLastFetchAt ? new Date(this.usageLastFetchAt).toLocaleTimeString() : "never"}`,
@@ -214,9 +226,7 @@ export class UsageController {
 
       this.usageSnapshot = data ? parseUsageSnapshot(data, resolvedModelId) : undefined;
       this.usageUpdatedAt = this.usageSnapshot ? Date.now() : undefined;
-      this.usageError = data
-        ? undefined
-        : `Missing openai-codex OAuth credentials in ${AUTH_FILE}.`;
+      this.usageError = data ? undefined : `${CODEX_AUTH_REQUIRED} Auth store: ${AUTH_FILE}.`;
       this.updateFooter(ctx);
       if (options?.notify)
         ctx.ui.notify(this.formatStatus(ctx), this.usageSnapshot ? "info" : "warning");

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.12
+
+- Validate against Pi 1.0.2, where `openai` supports ChatGPT subscription OAuth and `openai-codex` is labeled legacy; preserve the native OpenAI provider and transport.
+- Keep Ultrafast API-only: do not inject it for the new OpenAI subscription login, and retain Standard/Fast behavior.
+- Label separately authenticated Codex usage on OpenAI models and warn that it is not verified against the active OpenAI account.
+- Clarify that usage, banked resets, images, web search, and live voice still need `/login openai-codex`; never substitute direct-OpenAI OAuth credentials for Codex backend auth.
+- Add auth-boundary regressions and an isolated real-host subscription/API-key compatibility probe.
+
 ## 0.2.11
 
 - Auto-redeem banked Codex resets ten minutes before expiry instead of one minute, with matching settings and redemption-time displays.

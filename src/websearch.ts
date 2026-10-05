@@ -7,6 +7,7 @@ import {
   type WebsearchResponseLength,
 } from "./config.ts";
 import {
+  CODEX_AUTH_REQUIRED,
   type CodexCredentials,
   getCodexCredentials,
   type CodexCredentialsWithSource,
@@ -111,7 +112,7 @@ async function resolveSearchRoute(
     if (credentials) return { url: CODEX_SEARCH_URL, credentials };
     throw new WebSearchError(
       "authentication_required",
-      "Missing openai-codex OAuth credentials. Run /login openai-codex, or set websearch.provider.",
+      `${CODEX_AUTH_REQUIRED} Alternatively, set websearch.provider to use a gateway.`,
     );
   }
   let route: ReturnType<typeof resolveProviderRoute>;

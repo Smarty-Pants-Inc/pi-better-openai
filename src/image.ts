@@ -7,6 +7,7 @@ import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
 import sharp from "sharp";
 import { isRecord, normalizeImageModel, type ResolvedConfig } from "./config.ts";
 import {
+  CODEX_AUTH_REQUIRED,
   extractAccountIdFromJwt,
   getCodexCredentials,
   type CodexCredentialsWithSource,
@@ -129,7 +130,7 @@ async function getCredentials(
 ): Promise<CodexImageCredentials> {
   const credentials = await getCodexCredentials(ctx, signal);
   if (credentials) return credentials;
-  throw new Error("Missing openai-codex OAuth credentials. Run /login openai-codex.");
+  throw new Error(CODEX_AUTH_REQUIRED);
 }
 
 function resolveModel(params: Pick<ToolParams, "model">, cfg: ResolvedConfig): string {

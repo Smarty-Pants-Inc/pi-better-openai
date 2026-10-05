@@ -20,13 +20,15 @@ pi install npm:@monotykamary/pi-better-openai
 
 ## Authentication
 
-Usage display and image generation require pi's `openai-codex` OAuth credentials.
+Pi 1.0.2 supports **Sign in with ChatGPT** under `/login openai`, using the native Responses API at `api.openai.com`. Use `openai/*` models for that subscription login or an OpenAI API key; the extension preserves pi's native authentication and transport. Standard/Fast tier overrides work with both login methods on supported models.
 
-1. In pi, run `/login openai-codex`.
-2. Verify subscription usage with `/openai-usage`, or open `/openai-settings` and check **Diagnostics**.
+Pi labels `openai-codex` **legacy**, but this extension's usage polling, banked resets, image generation, and web search still call separate `chatgpt.com/backend-api` endpoints. By default they require the legacy Codex login, not the new direct-OpenAI OAuth grant. Web search can instead use an explicitly configured `websearch.provider` gateway, which owns its backend credentials and account selection. Credentials are never copied or substituted between providers.
+
+1. For those backend features, also run `/login openai-codex`. You can keep an `openai/*` model selected.
+2. Inspect the Codex account's usage with `/openai-usage`, or open `/openai-settings` and check **Diagnostics**. While using `openai/*`, the footer labels it **Codex Usage**: it is not verified against your active OpenAI login and could belong to a different account. For your OpenAI subscription, check [ChatGPT usage](https://chatgpt.com/settings/usage).
 3. The extension reads auth from pi's agent auth store, normally `~/.pi/agent/auth.json`. Do not copy, paste, or commit values from this file.
 4. If `PI_CODING_AGENT_DIR` is set, the auth store, global extension config, and global generated-image directory use that agent directory instead of `~/.pi/agent`. A leading `~/` is expanded to your home directory.
-5. When [pi-multiprovider](https://github.com/monotykamary/pi-multiprovider) 0.8.0+ pools several `openai-codex` accounts, the session's active account (chosen with `/switch-account`) is resolved first for usage display, image generation, and web search; the usage widget refreshes on every switch and whenever a resumed session restores the account, so it never keeps billing the account the session used before. Without that extension, credential resolution is unchanged.
+5. When [pi-multiprovider](https://github.com/monotykamary/pi-multiprovider) 0.8.0+ pools several `openai-codex` accounts, the session's active **Codex** account (chosen with `/switch-account`) is resolved first for usage display, banked resets, image generation, and web search; the usage widget refreshes on Codex account switches and session restores. An independently selected `openai` account does not select the Codex backend account. Without that extension, credential resolution is unchanged.
 
 ## Features
 
@@ -133,13 +135,13 @@ Example config:
 }
 ```
 
-Setting `image.enabled`, `websearch.enabled`, or `decisions.enabled` to `false` hides that tool and removes its system-prompt guidance, including from pi-fabric capture. Changes in `/openai-settings` or `/openai-decisions` apply immediately; use `/reload` after editing config files manually. Configuration commands remain available.
+Setting `image.enabled`, `websearch.enabled`, or `decisions.enabled` to `false` hides that tool from Pi and removes its system-prompt guidance. pi-fabric still lists hidden tools in its own catalogue and prompt line (tracked in Smarty-Pants-Inc/smarty-dev#5492). Changes in `/openai-settings` or `/openai-decisions` apply immediately; use `/reload` after editing config files manually. Configuration commands remain available.
 
 ## Service tiers
 
 `/openai-tier fast` requests `service_tier: "priority"`. `/openai-tier standard` explicitly requests `"default"`, clearing an inherited Fast/Ultrafast request tier on OpenAI providers. Legacy disabled configurations without an explicit tier leave payloads untouched. `/fast` and the `--fast` flag never select Ultrafast.
 
-`/openai-tier ultrafast` explicitly opts into **6x Standard token prices** for `openai/gpt-6-astra` over the Responses API. Only the documented global (`https://api.openai.com/v1`) and US (`https://us.api.openai.com/v1`) endpoints are enabled. EU/regional endpoints, custom proxies, other models, and Codex subscription Ultrafast are not enabled without verified support. This does not promise account entitlement or available rate limits. Unsupported selections remain requested but inactive; the extension does not inject a lower-tier fallback or retry a rejected request.
+`/openai-tier ultrafast` explicitly opts into **6x Standard token prices** for **API-key-authenticated** `openai/gpt-6-astra` over the Responses API. Only the documented global (`https://api.openai.com/v1`) and US (`https://us.api.openai.com/v1`) endpoints are enabled. EU/regional endpoints, custom proxies, other models, and ChatGPT subscription Ultrafast (both `openai` OAuth and legacy `openai-codex`) are not enabled without verified support. This does not promise account entitlement or available rate limits. Unsupported selections remain requested but inactive; the extension does not inject a lower-tier fallback or retry a rejected request.
 
 The footer shows `fast` or `ultrafast` only when supported by the current model. Diagnostics distinguish the requested tier and last injected payload from server-confirmed service or billing. **Pi's host cost estimates may omit the Ultrafast premium**; use OpenAI billing for actual charges. The host's native transport is preserved; WebSockets are recommended by OpenAI but HTTP is also supported. See [Ultrafast documentation](https://developers.openai.com/api/docs/guides/ultrafast-mode) and [pricing](https://developers.openai.com/api/docs/pricing?latest-pricing=ultrafast).
 
@@ -181,6 +183,8 @@ Example tool input:
 - Reported classifier token usage/cost is included in tool results and the Better OpenAI footer. Missing usage or catalog pricing is not evidence that a request was free.
 
 ## Codex model fallbacks
+
+These fallbacks remain scoped to the legacy provider. The native `openai` provider and its catalog are not replaced or redirected to Codex.
 
 The extension adds `gpt-6.1-sol`, `gpt-6-astra`, `gpt-daybreak-blue-latest`, and `gpt-daybreak-red-latest` to the built-in `openai-codex` provider without requiring local `models.json` entries. Existing built-in models remain available, and metadata from pi's live catalog takes precedence when pi publishes an official entry with the same ID.
 
