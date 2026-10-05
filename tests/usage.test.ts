@@ -883,4 +883,68 @@ describe("multiprovider resume", () => {
       await emit(harness, "session_shutdown");
     },
   );
+
+  test("a selected account-less openai account is never replaced after switch/resume", async () => {
+    // Security S2 / Astra R3 (PR #27): Pi 1.0's direct token has no account-id claim.
+    const accountless = `header.${Buffer.from(
+      JSON.stringify({ "https://api.openai.com/auth": { per_user_salt: "salt" } }),
+    ).toString("base64url")}.signature`;
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            rate_limit: {
+              allowed: true,
+              primary_window: { used_percent: 10, reset_after_seconds: 60 },
+            },
+          }),
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const harness = await createUsageHarness({
+      usageConfig: {
+        enabled: true,
+        refreshIntervalMs: 60000,
+        showOnlyOnSubscriptionModels: true,
+        showResetTimes: false,
+      },
+      model: { provider: "openai", id: "gpt-5.6-sol" } as unknown as ExtensionContext["model"],
+      isUsingOAuth: true,
+    });
+    await settleAsyncWork();
+    const service = fakeMultiproviderService();
+    harness.publishService(service.value);
+    await emit(harness, "session_start");
+    await settleAsyncWork();
+
+    service.resolve(async (poolProviderId) => ({
+      accessToken: poolProviderId === "openai" ? accountless : codexJwt("acct_pool_b"),
+      label: poolProviderId === "openai" ? "Work" : "Personal",
+    }));
+    const callsBefore = fetchMock.mock.calls.length;
+    service.notifyAccountChanged({
+      providerId: "openai",
+      account: { id: "acct_work", label: "Work", authKind: "oauth" },
+      ctx: harness.ctx,
+    });
+    await vi.waitFor(() =>
+      expect(service.resolveActiveAccountAuth).toHaveBeenCalledWith(
+        "openai",
+        harness.ctx,
+        expect.anything(),
+      ),
+    );
+    await settleAsyncWork();
+    expect(service.resolveActiveAccountAuth.mock.calls.map(([provider]) => provider)).not.toContain(
+      "openai-codex",
+    );
+    const after = fetchMock.mock.calls.slice(callsBefore) as unknown as [unknown, RequestInit?][];
+    for (const [, init] of after) {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      expect(headers["chatgpt-account-id"]).not.toBe("acct_pool_b");
+      expect(headers.authorization).not.toBe(`Bearer ${codexJwt("acct_pool_b")}`);
+    }
+    await emit(harness, "session_shutdown");
+  });
 });

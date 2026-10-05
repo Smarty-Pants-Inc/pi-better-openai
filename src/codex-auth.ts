@@ -1,11 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-  CHATGPT_PROVIDER_IDS,
-  CODEX_PROVIDER_ID,
-  getActiveMultiproviderService,
-} from "./multiprovider.ts";
+import { CHATGPT_PROVIDER_IDS, getActiveMultiproviderService } from "./multiprovider.ts";
 import { piAgentDir } from "./paths.ts";
 
 export const AUTH_FILE = join(piAgentDir(), "auth.json");
@@ -115,7 +111,17 @@ export function parseCodexRegistryCredentials(
  */
 export const ACCOUNT_ID_ISSUE = "Smarty-Pants-Inc/pi-better-openai#27";
 
-export function accountIdRequiredMessage(command: string, alternative?: string): string {
+export function accountIdRequiredMessage(
+  command: string,
+  alternative?: string,
+  selectedPool?: string,
+): string {
+  if (selectedPool)
+    return (
+      `${command} needs a ChatGPT account id; the selected ${selectedPool} account does not provide one, ` +
+      `and another account is never used in its place. Select an openai-codex account, or run /login openai-codex ` +
+      `(OpenAI Codex, legacy)${alternative ? `, ${alternative}` : ""} to use it (see ${ACCOUNT_ID_ISSUE}).`
+    );
   return (
     `${command} needs a ChatGPT account id; Pi 1.0's ChatGPT login (/login openai) does not provide one. ` +
     `Run /login openai-codex (OpenAI Codex, legacy)${alternative ? `, ${alternative}` : ""} to use it (see ${ACCOUNT_ID_ISSUE}).`
@@ -123,8 +129,8 @@ export function accountIdRequiredMessage(command: string, alternative?: string):
 }
 
 export class AccountIdRequiredError extends Error {
-  constructor(command: string, alternative?: string) {
-    super(accountIdRequiredMessage(command, alternative));
+  constructor(command: string, alternative?: string, selectedPool?: string) {
+    super(accountIdRequiredMessage(command, alternative, selectedPool));
     this.name = "AccountIdRequiredError";
   }
 }
@@ -195,42 +201,65 @@ export async function requireCodexCredentials(
 ): Promise<CodexCredentialsWithSource> {
   const resolved = await resolveCodexCredentials(ctx, signal);
   if (resolved.credentials) return resolved.credentials;
-  if (resolved.directTokenOnly) throw new AccountIdRequiredError(command, alternative);
+  if (resolved.selectedPoolFailed)
+    throw new Error(
+      `${command} could not resolve the selected ${resolved.selectedPool} account, and another account is never used in its place. ` +
+        `Select or log in to an openai-codex account (/login openai-codex).`,
+    );
+  if (resolved.directTokenOnly)
+    throw new AccountIdRequiredError(command, alternative, resolved.selectedPool);
   throw new Error(missingMessage);
 }
+
+type CodexResolution = {
+  credentials?: CodexCredentialsWithSource;
+  directTokenOnly: boolean;
+  /** Set when a selected pool account refused: no other account may replace it. */
+  selectedPool?: string;
+  selectedPoolFailed?: boolean;
+};
 
 async function resolveCodexCredentials(
   ctx?: CodexCredentialsContext,
   signal?: AbortSignal,
-): Promise<{ credentials?: CodexCredentialsWithSource; directTokenOnly: boolean }> {
+): Promise<CodexResolution> {
   let directTokenOnly = false;
   if (signal?.aborted) throw signal.reason ?? new Error("Operation was aborted.");
   // A pooled account pinned for this session (pi-multiprovider /switch-account)
   // wins over pi's own credential: subscription usage is per-account.
   const multiprovider = getActiveMultiproviderService();
   if (multiprovider && ctx) {
-    // Resolve the selected provider's session pin before the other pool's default.
-    const poolProviderIds =
-      ctx.model?.provider === CODEX_PROVIDER_ID
-        ? [CODEX_PROVIDER_ID, CHATGPT_PROVIDER_IDS[0]]
-        : CHATGPT_PROVIDER_IDS;
+    // Security S2 (PR #27): the selected model's pool is authoritative. Its account is used
+    // or the command refuses; it never falls through to another pool or Pi credential.
+    const selectedPool = (CHATGPT_PROVIDER_IDS as readonly string[]).includes(
+      ctx.model?.provider ?? "",
+    )
+      ? ctx.model?.provider
+      : undefined;
+    const poolProviderIds = selectedPool ? [selectedPool] : CHATGPT_PROVIDER_IDS;
     for (const providerId of poolProviderIds) {
+      let resolved;
       try {
-        const resolved = await waitForSignal(
+        resolved = await waitForSignal(
           multiprovider.resolveActiveAccountAuth(providerId, ctx, signal),
           signal,
         );
-        const accountId = resolved ? extractAccountIdFromJwt(resolved.accessToken) : undefined;
-        if (resolved && accountId) {
-          return {
-            credentials: { accessToken: resolved.accessToken, accountId, source: "multiprovider" },
-            directTokenOnly: false,
-          };
-        }
       } catch {
         if (signal?.aborted) throw signal.reason ?? new Error("Operation was aborted.");
-        // Try the other pool, then pi-owned credential resolution.
+        if (selectedPool) return { directTokenOnly: false, selectedPool, selectedPoolFailed: true };
+        continue; // Nothing selected: try the other pool, then pi-owned credentials.
       }
+      if (!resolved) continue; // No account in this pool.
+      const accountId = extractAccountIdFromJwt(resolved.accessToken);
+      if (accountId)
+        return {
+          credentials: { accessToken: resolved.accessToken, accountId, source: "multiprovider" },
+          directTokenOnly: false,
+        };
+      // ponytail: a pool account with a ChatGPT identity but no account id is a real
+      // account; replacing it with another identity is the S2 leak, selected or not.
+      if (selectedPool || isDirectChatGptToken(resolved.accessToken))
+        return { directTokenOnly: true, selectedPool: providerId };
     }
   }
   for (const providerId of CHATGPT_PROVIDER_IDS) {

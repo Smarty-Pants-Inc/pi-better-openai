@@ -160,3 +160,86 @@ test("an OpenAI API key is reported as missing ChatGPT credentials, not a missin
     /^missing$/,
   );
 });
+
+// Security S2 / Astra R3 (PR #27): Pi 1.0's direct ChatGPT token has no account-id claim.
+const accountless = `header.${Buffer.from(
+  JSON.stringify({ "https://api.openai.com/auth": { per_user_salt: "salt" } }),
+).toString("base64url")}.signature`;
+
+function pools(byProvider: Record<string, string | undefined | Error>) {
+  const resolveActiveAccountAuth = vi.fn(async (providerId: string) => {
+    const value = byProvider[providerId];
+    if (value instanceof Error) throw value;
+    return value ? { accessToken: value, label: `Synthetic ${providerId}` } : undefined;
+  });
+  setActiveMultiproviderService({
+    getActiveAccount: vi.fn(async () => undefined),
+    resolveActiveAccountAuth,
+    onActiveAccountChanged: vi.fn(() => () => {}),
+  });
+  return resolveActiveAccountAuth;
+}
+
+test.each([
+  ["an account-less token", accountless, "needs a ChatGPT account id; the selected openai account"],
+  [
+    "a failed resolution",
+    new Error("store locked"),
+    "could not resolve the selected openai account",
+  ],
+])(
+  "a selected openai pool with %s never falls back to another account",
+  async (_label, selected, refusal) => {
+    writeAuth({ type: "oauth", access: accountless }, legacy);
+    const getApiKeyForProvider = vi.fn(async (provider: string) =>
+      provider === "openai-codex" ? jwt("acct_registry_codex") : accountless,
+    );
+    const resolve = pools({ openai: selected, "openai-codex": jwt("acct_pool_codex") });
+    const ctx = {
+      model: { provider: "openai" },
+      modelRegistry: { getApiKeyForProvider },
+    } as unknown as ExtensionContext;
+    await expect(requireCodexCredentials(ctx, "/openai-usage", "missing")).rejects.toThrow(
+      `/openai-usage ${refusal}`,
+    );
+    // The reset paths use getCodexCredentials: they must get nothing, not account B.
+    expect(await getCodexCredentials(ctx)).toBeUndefined();
+    expect(resolve.mock.calls.map(([provider]) => provider)).toEqual(["openai", "openai"]);
+    expect(getApiKeyForProvider).not.toHaveBeenCalled();
+  },
+);
+
+test("a selected openai-codex pool account is used", async () => {
+  pools({ openai: accountless, "openai-codex": jwt("acct_pool_codex") });
+  const ctx = { model: { provider: "openai-codex" } } as unknown as ExtensionContext;
+  expect(await requireCodexCredentials(ctx, "/openai-usage", "missing")).toEqual({
+    accessToken: jwt("acct_pool_codex"),
+    accountId: "acct_pool_codex",
+    source: "multiprovider",
+  });
+});
+
+test("an unselected account-less pool identity is not replaced by the other pool", async () => {
+  pools({ openai: accountless, "openai-codex": jwt("acct_pool_codex") });
+  const ctx = { model: undefined } as unknown as ExtensionContext;
+  await expect(requireCodexCredentials(ctx, "/openai-usage", "missing")).rejects.toThrow(
+    "the selected openai account does not provide one",
+  );
+});
+
+test("with nothing selected, only an openai-codex login works as before", async () => {
+  writeAuth(undefined, legacy);
+  pools({});
+  const ctx = { model: undefined } as unknown as ExtensionContext;
+  expect(await requireCodexCredentials(ctx, "/openai-usage", "missing")).toEqual({
+    accessToken: "legacy-token",
+    accountId: "acct_legacy",
+    source: "authFile",
+  });
+  setActiveMultiproviderService(undefined);
+  expect(await requireCodexCredentials(undefined, "/openai-usage", "missing")).toEqual({
+    accessToken: "legacy-token",
+    accountId: "acct_legacy",
+    source: "authFile",
+  });
+});
