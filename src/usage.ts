@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getCodexCredentials } from "./codex-auth.ts";
+import { AccountIdRequiredError, requireCodexCredentials } from "./codex-auth.ts";
 export { AUTH_FILE, readCodexAuth } from "./codex-auth.ts";
 
 export type UsageWindow = {
@@ -140,8 +140,14 @@ export async function requestCodexUsage(
 ): Promise<CodexUsageResponse | undefined> {
   const ctx = isAbortSignal(ctxOrSignal) ? undefined : ctxOrSignal;
   const requestSignal = isAbortSignal(ctxOrSignal) ? ctxOrSignal : signal;
-  const credentials = await getCodexCredentials(ctx, requestSignal);
-  if (!credentials) return undefined;
+  let credentials;
+  try {
+    credentials = await requireCodexCredentials(ctx, "/openai-usage", "", requestSignal);
+  } catch (error) {
+    if (error instanceof AccountIdRequiredError) throw error;
+    if (requestSignal?.aborted) throw error;
+    return undefined;
+  }
   const response = await fetch(USAGE_URL, {
     headers: {
       accept: "*/*",

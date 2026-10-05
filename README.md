@@ -22,7 +22,7 @@ pi install npm:@monotykamary/pi-better-openai
 
 Usage display, image generation, and web search require pi's ChatGPT OAuth credentials. The extension preserves credential-source priority: the pinned pooled account, refreshed model-registry auth, then unexpired auth-file entries. Within each source it tries `openai` first, falling back to legacy `openai-codex` credentials; API keys are not subscription credentials.
 
-1. In pi, run `/login openai` and choose **Sign in with ChatGPT**.
+1. In pi, run `/login openai` and choose **Sign in with ChatGPT**. Pi 1.0's ChatGPT login (`openai`) is a direct `api.openai.com` token with no ChatGPT account id, and the usage, image and web search endpoints need one: with only that login, these commands say so. Run `/login openai-codex` (**OpenAI Codex (legacy)**) as well to use them; web search can also use `websearch.provider`.
 2. Verify subscription usage with `/openai-usage`, or open `/openai-settings` and check **Diagnostics**.
 3. The extension reads auth from pi's agent auth store, normally `~/.pi/agent/auth.json`. Do not copy, paste, or commit values from this file.
 4. If `PI_CODING_AGENT_DIR` is set, the auth store, global extension config, and global generated-image directory use that agent directory instead of `~/.pi/agent`. A leading `~/` is expanded to your home directory.

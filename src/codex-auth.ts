@@ -105,7 +105,45 @@ export function parseCodexRegistryCredentials(
   return accountId ? { accessToken: value, accountId } : undefined;
 }
 
-export function readCodexAuth(): CodexCredentials | undefined {
+/**
+ * Pi 1.0's "Sign in with ChatGPT" (`openai`, client `dynamic_agent_client`) stores
+ * `{type, access, refresh, expires, clientId, scopes}`: no account id, and the access token
+ * has no `chatgpt_account_id` claim. Pi sends it only to `https://api.openai.com/v1`
+ * (pi-ai `providers/openai.js:10`, `auth/oauth/openai-chatgpt.js:18,262-264`). Pi's own
+ * chatgpt.com backend path refuses a token without an account id
+ * (pi-ai `api/openai-codex-responses.js:1266-1279`), so this extension does too.
+ */
+export const ACCOUNT_ID_ISSUE = "Smarty-Pants-Inc/pi-better-openai#27";
+
+export function accountIdRequiredMessage(command: string, alternative?: string): string {
+  return (
+    `${command} needs a ChatGPT account id; Pi 1.0's ChatGPT login (/login openai) does not provide one. ` +
+    `Run /login openai-codex (OpenAI Codex, legacy)${alternative ? `, ${alternative}` : ""} to use it (see ${ACCOUNT_ID_ISSUE}).`
+  );
+}
+
+export class AccountIdRequiredError extends Error {
+  constructor(command: string, alternative?: string) {
+    super(accountIdRequiredMessage(command, alternative));
+    this.name = "AccountIdRequiredError";
+  }
+}
+
+/** A ChatGPT OAuth JWT (not an `sk-` API key) that carries no account id. */
+function isDirectChatGptToken(token: string | undefined): boolean {
+  const value = token?.trim();
+  return (
+    !!value &&
+    !value.startsWith("sk-") &&
+    value.split(".").length === 3 &&
+    !extractAccountIdFromJwt(value)
+  );
+}
+
+type AuthFileResolution = { credentials?: CodexCredentials; directTokenOnly: boolean };
+
+function resolveAuthFile(): AuthFileResolution {
+  let directTokenOnly = false;
   try {
     const auth = JSON.parse(readFileSync(AUTH_FILE, "utf8")) as Record<
       string,
@@ -123,18 +161,49 @@ export function readCodexAuth(): CodexCredentials | undefined {
       if (entry?.type !== "oauth") continue;
       if (typeof entry.expires === "number" && Date.now() >= entry.expires) continue;
       const credentials = parseCodexRegistryCredentials(JSON.stringify(entry));
-      if (credentials) return credentials;
+      if (credentials) return { credentials, directTokenOnly: false };
+      if (typeof entry.access === "string" && isDirectChatGptToken(entry.access))
+        directTokenOnly = true;
     }
-    return undefined;
+    return { directTokenOnly };
   } catch {
-    return undefined;
+    return { directTokenOnly };
   }
+}
+
+export function readCodexAuth(): CodexCredentials | undefined {
+  return resolveAuthFile().credentials;
 }
 
 export async function getCodexCredentials(
   ctx?: CodexCredentialsContext,
   signal?: AbortSignal,
 ): Promise<CodexCredentialsWithSource | undefined> {
+  return (await resolveCodexCredentials(ctx, signal)).credentials;
+}
+
+/**
+ * Credentials for a chatgpt.com backend endpoint. Throws AccountIdRequiredError when the
+ * only ChatGPT login is Pi 1.0's direct token, and `missingMessage` when there is none.
+ */
+export async function requireCodexCredentials(
+  ctx: CodexCredentialsContext | undefined,
+  command: string,
+  missingMessage: string,
+  signal?: AbortSignal,
+  alternative?: string,
+): Promise<CodexCredentialsWithSource> {
+  const resolved = await resolveCodexCredentials(ctx, signal);
+  if (resolved.credentials) return resolved.credentials;
+  if (resolved.directTokenOnly) throw new AccountIdRequiredError(command, alternative);
+  throw new Error(missingMessage);
+}
+
+async function resolveCodexCredentials(
+  ctx?: CodexCredentialsContext,
+  signal?: AbortSignal,
+): Promise<{ credentials?: CodexCredentialsWithSource; directTokenOnly: boolean }> {
+  let directTokenOnly = false;
   if (signal?.aborted) throw signal.reason ?? new Error("Operation was aborted.");
   // A pooled account pinned for this session (pi-multiprovider /switch-account)
   // wins over pi's own credential: subscription usage is per-account.
@@ -153,7 +222,10 @@ export async function getCodexCredentials(
         );
         const accountId = resolved ? extractAccountIdFromJwt(resolved.accessToken) : undefined;
         if (resolved && accountId) {
-          return { accessToken: resolved.accessToken, accountId, source: "multiprovider" };
+          return {
+            credentials: { accessToken: resolved.accessToken, accountId, source: "multiprovider" },
+            directTokenOnly: false,
+          };
         }
       } catch {
         if (signal?.aborted) throw signal.reason ?? new Error("Operation was aborted.");
@@ -171,8 +243,16 @@ export async function getCodexCredentials(
         )
       : undefined;
     const registryCredentials = parseCodexRegistryCredentials(registryToken);
-    if (registryCredentials) return { ...registryCredentials, source: "modelRegistry" };
+    if (registryCredentials)
+      return {
+        credentials: { ...registryCredentials, source: "modelRegistry" },
+        directTokenOnly: false,
+      };
+    if (providerId === CHATGPT_PROVIDER_IDS[0] && isDirectChatGptToken(registryToken))
+      directTokenOnly = true;
   }
-  const auth = readCodexAuth();
-  return auth ? { ...auth, source: "authFile" } : undefined;
+  const auth = resolveAuthFile();
+  return auth.credentials
+    ? { credentials: { ...auth.credentials, source: "authFile" }, directTokenOnly: false }
+    : { directTokenOnly: directTokenOnly || auth.directTokenOnly };
 }

@@ -8,7 +8,7 @@ import sharp from "sharp";
 import { isRecord, normalizeImageModel, type ResolvedConfig } from "./config.ts";
 import {
   extractAccountIdFromJwt,
-  getCodexCredentials,
+  requireCodexCredentials,
   type CodexCredentialsWithSource,
 } from "./codex-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
@@ -126,10 +126,11 @@ async function getCredentials(
   ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<CodexImageCredentials> {
-  const credentials = await getCodexCredentials(ctx, signal);
-  if (credentials) return credentials;
-  throw new Error(
+  return requireCodexCredentials(
+    ctx,
+    "/openai-image",
     "Missing ChatGPT OAuth credentials. Run /login openai and choose Sign in with ChatGPT.",
+    signal,
   );
 }
 

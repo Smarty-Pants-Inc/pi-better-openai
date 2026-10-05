@@ -7,7 +7,8 @@ import { setActiveMultiproviderService } from "../src/multiprovider.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "pi-better-openai-auth-"));
 vi.stubEnv("PI_CODING_AGENT_DIR", scratch);
-const { getCodexCredentials, readCodexAuth } = await import("../src/codex-auth.ts");
+const { getCodexCredentials, readCodexAuth, requireCodexCredentials } =
+  await import("../src/codex-auth.ts");
 vi.unstubAllEnvs();
 
 function jwt(accountId: string): string {
@@ -129,4 +130,33 @@ test("does not continue to legacy resolution after a cancelled openai lookup", a
   controller.abort(new Error("cancelled"));
   await expect(request).rejects.toThrow("cancelled");
   expect(getApiKeyForProvider.mock.calls).toEqual([["openai"]]);
+});
+
+test("auth-file fallback: Pi 1.0 ChatGPT login without an account id refuses clearly", async () => {
+  const payload = Buffer.from(
+    JSON.stringify({ "https://api.openai.com/auth": { per_user_salt: "salt" } }),
+  ).toString("base64url");
+  writeAuth({
+    type: "oauth",
+    access: `header.${payload}.signature`,
+    refresh: "refresh",
+    expires: Date.now() + 60_000,
+    clientId: "client",
+    scopes: ["resource.invoke", "chatgpt.tokens.use.direct"],
+  });
+  expect(readCodexAuth()).toBeUndefined();
+  await expect(requireCodexCredentials(undefined, "/openai-usage", "missing")).rejects.toThrow(
+    "/openai-usage needs a ChatGPT account id",
+  );
+});
+
+test("an OpenAI API key is reported as missing ChatGPT credentials, not a missing account id", async () => {
+  writeAuth(undefined);
+  const getApiKeyForProvider = vi.fn(async (provider: string) =>
+    provider === "openai" ? "sk-test-key" : undefined,
+  );
+  const ctx = { modelRegistry: { getApiKeyForProvider } } as unknown as ExtensionContext;
+  await expect(requireCodexCredentials(ctx, "/openai-usage", "missing")).rejects.toThrow(
+    /^missing$/,
+  );
 });

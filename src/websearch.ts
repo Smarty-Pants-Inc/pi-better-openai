@@ -8,7 +8,7 @@ import {
 } from "./config.ts";
 import {
   type CodexCredentials,
-  getCodexCredentials,
+  requireCodexCredentials,
   type CodexCredentialsWithSource,
 } from "./codex-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
@@ -106,12 +106,22 @@ async function resolveSearchRoute(
 ): Promise<SearchRoute> {
   const provider = cfg.websearch.provider;
   if (!provider) {
-    const credentials = await getCodexCredentials(ctx, signal);
-    if (credentials) return { url: CODEX_SEARCH_URL, credentials };
-    throw new WebSearchError(
-      "authentication_required",
-      "Missing ChatGPT OAuth credentials. Run /login openai and choose Sign in with ChatGPT, or set websearch.provider.",
-    );
+    try {
+      const credentials = await requireCodexCredentials(
+        ctx,
+        "/openai-websearch",
+        "Missing ChatGPT OAuth credentials. Run /login openai and choose Sign in with ChatGPT, or set websearch.provider.",
+        signal,
+        "or set websearch.provider",
+      );
+      return { url: CODEX_SEARCH_URL, credentials };
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      throw new WebSearchError(
+        "authentication_required",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
   let route: ReturnType<typeof resolveProviderRoute>;
   try {
