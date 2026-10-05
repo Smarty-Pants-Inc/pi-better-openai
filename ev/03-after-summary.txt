@@ -1,0 +1,10 @@
+export: 03-after.html
+top-level tools (1): fabric_exec
+system prompt mentions "openai_image": 1 time(s)
+system prompt mentions "openai_websearch": 1 time(s)
+system prompt mentions "openai_decide": 1 time(s)
+system prompt mentions "Generate or edit raster images": 0 time(s)
+system prompt mentions "Search the live web": 0 time(s)
+system prompt mentions "explicitly requested judgments": 0 time(s)
+system prompt lines mentioning openai_ / Better OpenAI:
+  | - @monotykamary/pi-better-openai: openai_decide, openai_image, openai_websearch

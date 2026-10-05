@@ -1,0 +1,22 @@
+== 2026-10-05T09:22:41Z 00-startup: Pi started with -ne -e wt/index.ts -e pi-fabric
+== 2026-10-05T09:22:47Z 01a-settings-main: openai-settings main menu (defaults)
+== 2026-10-05T09:22:54Z 01b-decisions-before: Typed decisions submenu before
+== 2026-10-05T09:22:55Z 01c-decisions-enabled: Enable decisions toggled to true
+== 2026-10-05T09:22:57Z 01d-settings-main-after-enable: main menu after enabling decisions
+== 2026-10-05T09:23:05Z 01e-decisions-status-enabled: /openai-decisions status after enable
+== 2026-10-05T09:23:17Z 03a-turn-before: model turn listing captured openai_ tools (all enabled)
+== 2026-10-05T09:23:24Z 03b-export-before: export before
+== 2026-10-05T09:23:36Z 01f-image-before: Image tool submenu before
+== 2026-10-05T09:23:37Z 01g-image-disabled: Image tool toggled to false
+== 2026-10-05T09:23:41Z 01h-websearch-before: Web search submenu before
+== 2026-10-05T09:23:42Z 01i-websearch-disabled: Web search tool toggled to false
+== 2026-10-05T09:23:43Z 01j-settings-main-after-disable: main menu after disabling image + websearch
+== 2026-10-05T09:23:52Z 02a-decisions-off: /openai-decisions off
+== 2026-10-05T09:23:58Z 02b-decisions-status-after-off: /openai-decisions status after off
+== 2026-10-05T09:24:10Z 03c-turn-after: model turn listing captured openai_ tools (all disabled)
+== 2026-10-05T09:24:17Z 03d-export-after: export after
+== 2026-10-05T09:24:33Z 04a-usage-autoredeem: Usage submenu: Auto-redeem banked resets (10-minute description)
+== 2026-10-05T09:24:36Z 04b-usage-reset-times: Usage submenu: Usage reset times
+== 2026-10-05T09:24:49Z 04c-openai-usage: /openai-usage (reset-time display) without Codex login
+== 2026-10-05T09:24:58Z 04d-openai-resets: /openai-resets (reset picker) without Codex login
+== done

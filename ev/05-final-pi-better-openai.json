@@ -1,0 +1,50 @@
+{
+  "decisions": {
+    "enabled": false,
+    "model": "",
+    "timeoutMs": 10000
+  },
+  "persistState": true,
+  "notifyOnModelSwitch": true,
+  "active": false,
+  "desiredActive": false,
+  "usage": {
+    "enabled": true,
+    "refreshIntervalMs": 60000,
+    "showOnlyOnSubscriptionModels": true,
+    "showResetTimes": true,
+    "showBankedResets": true,
+    "autoRedeemBankedResets": true
+  },
+  "footer": {
+    "mode": "replace"
+  },
+  "image": {
+    "enabled": false,
+    "defaultModel": "gpt-image-2.5",
+    "defaultSave": "project",
+    "outputFormat": "png",
+    "timeoutMs": 180000
+  },
+  "websearch": {
+    "enabled": false,
+    "model": "gpt-6-luna",
+    "reasoningEffort": "max",
+    "responseLength": "short",
+    "maxOutputTokens": 4096,
+    "timeoutMs": 25000,
+    "provider": ""
+  },
+  "pets": {
+    "enabled": false,
+    "slug": "",
+    "placement": "inline-right",
+    "state": "idle",
+    "thinkingState": "review",
+    "toolState": "running",
+    "failedToolState": "failed",
+    "idleEmotes": true,
+    "idleEmoteIntervalMs": 30000,
+    "sizeCells": 10
+  }
+}
