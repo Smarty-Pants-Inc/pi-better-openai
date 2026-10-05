@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.11
+
+- Auto-redeem banked Codex resets ten minutes before expiry instead of one minute, with matching settings and redemption-time displays.
+- Preserve the scheduled credit across polling refreshes so the longer lead retains the no-fallback safeguard.
+- Extend the shared redemption cooldown to ten minutes and add regression coverage for exact timing and startup inside the redemption window.
+
+## 0.2.10
+
+- Hide disabled image, web search, and decision tools and their prompt guidance, including from pi-fabric capture.
+- Apply settings and decision-command toggles immediately without reactivating unrelated tools; retain execution guards and configuration commands.
+- Add real Pi regression coverage for startup, live toggles, nested-call availability, and prompt updates.
+- Update brace-expansion to 5.0.11 and undici to 8.10.2 to resolve high-severity security advisories.
+
 ## 0.2.9
 
 - Validate Pi 1.0.0 with exact development pins and wildcard host peers.

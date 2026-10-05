@@ -159,7 +159,7 @@ export class ResetController {
     );
   }
 
-  private scheduleAutoRedeem(): void {
+  private scheduleAutoRedeem(scheduled?: BankedResetCredit): void {
     const ctx = this.activeCtx;
     if (!ctx || this.redeeming) return;
     try {
@@ -170,7 +170,7 @@ export class ResetController {
       // A cache refresh must not replace a due timer with the next credit,
       // particularly when the scheduled one was redeemed in another client.
       if (this.autoTimer) return;
-      const credit = selectAutoRedeemCredit(this.cache?.credits.credits ?? []);
+      const credit = scheduled ?? selectAutoRedeemCredit(this.cache?.credits.credits ?? []);
       if (!credit || credit.expiresAtMs === null) return;
       const dueAt = Math.max(
         credit.expiresAtMs - BANKED_RESET_AUTO_REDEEM_LEAD_MS,
@@ -179,7 +179,9 @@ export class ResetController {
       this.autoTimer = setTimeout(
         () => {
           this.autoTimer = undefined;
-          if (Date.now() < dueAt) this.scheduleAutoRedeem();
+          // Preserve the exact credit across capped timer wakeups, even when
+          // a polling refresh has changed the cached credit list.
+          if (Date.now() < dueAt) this.scheduleAutoRedeem(credit);
           else void this.autoRedeem(ctx, credit);
         },
         Math.max(0, Math.min(dueAt - Date.now(), BANKED_RESET_CACHE_TTL_MS)),

@@ -52,9 +52,9 @@ Usage display and image generation require pi's `openai-codex` OAuth credentials
 
 ## Banked resets
 
-Unused banked Codex resets **auto-redeem by default, 1 minute before expiry**, while an interactive pi session is running and Codex credentials are available. Starting pi within that final one-minute window also triggers the check; expired credits are skipped. This runs independently of the usage display and current model. The reset picker and confirmation show each credit's actual local auto-redemption date and time (expiry minus one minute) beside its expiry. Disable **Auto-redeem banked resets** in `/openai-settings` or set `usage.autoRedeemBankedResets` to `false` to opt out.
+Unused banked Codex resets **auto-redeem by default, 10 minutes before expiry**, while an interactive pi session is running and Codex credentials are available. Starting pi within that final ten-minute window also triggers the check; expired credits are skipped. This runs independently of the usage display and current model. The reset picker and confirmation show each credit's actual local auto-redemption date and time (expiry minus ten minutes) beside its expiry. Disable **Auto-redeem banked resets** in `/openai-settings` or set `usage.autoRedeemBankedResets` to `false` to opt out.
 
-For safety, each attempt targets one explicit, freshly checked credit ID, with no fallback to another credit and no automatic retry after a consume request (including errors or `nothing_to_reset`). A persistent per-account guard permits at most one redemption attempt in one minute across pi sessions sharing the same agent directory; manual redemption uses the same guard. Automatic reservations recheck the one-minute eligibility window while holding an exclusive filesystem lock, and attempted credit IDs remain blocked even after later redemptions or restarts. Simultaneously expiring credits are not drained, and later credits wait for their own final one-minute window. Reservations live under `$PI_CODING_AGENT_DIR/pi-better-openai/reset-redemptions` (default `~/.pi/agent/pi-better-openai/reset-redemptions`); unreadable state or an orphaned lock blocks redemption rather than risking a duplicate. Update/restart all pi instances to use the current guard. Separate machines/agent directories cannot coordinate this local guard; instances using the same account should share an agent directory.
+For safety, each attempt targets one explicit, freshly checked credit ID, with no fallback to another credit and no automatic retry after a consume request (including errors or `nothing_to_reset`). A persistent per-account guard permits at most one redemption attempt in ten minutes across pi sessions sharing the same agent directory; manual redemption uses the same guard. Automatic reservations recheck the ten-minute eligibility window while holding an exclusive filesystem lock, and attempted credit IDs remain blocked even after later redemptions or restarts. Simultaneously expiring credits are not drained, and later credits wait for their own final ten-minute window. Reservations live under `$PI_CODING_AGENT_DIR/pi-better-openai/reset-redemptions` (default `~/.pi/agent/pi-better-openai/reset-redemptions`); unreadable state or an orphaned lock blocks redemption rather than risking a duplicate. Update/restart all pi instances to use the current guard. Separate machines/agent directories cannot coordinate this local guard; instances using the same account should share an agent directory.
 
 Pi must remain running and awake; this is not an OS-level scheduled task. No eligible usage window or unavailable credentials can prevent redemption.
 
@@ -132,6 +132,8 @@ Example config:
   }
 }
 ```
+
+Setting `image.enabled`, `websearch.enabled`, or `decisions.enabled` to `false` hides that tool and removes its system-prompt guidance, including from pi-fabric capture. Changes in `/openai-settings` or `/openai-decisions` apply immediately; use `/reload` after editing config files manually. Configuration commands remain available.
 
 ## Service tiers
 

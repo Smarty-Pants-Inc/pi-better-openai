@@ -13,6 +13,7 @@ import {
 } from "./codex-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
 import { piAgentDir, resolveUserPath } from "./paths.ts";
+import { registerOptionalTool, type OptionalTool } from "./optional-tool.ts";
 
 const OPENAI_IMAGE_TOOL = "openai_image";
 const OPENAI_IMAGE_COMMAND = "openai-image";
@@ -464,7 +465,7 @@ function resultText(result: CodexImageResult): string {
 export function registerOpenAIImage(
   pi: ExtensionAPI,
   getConfig: (ctx: ExtensionContext) => ResolvedConfig,
-): { getDebug: (ctx: ExtensionContext) => Promise<ImageGenerationDebug> } {
+): OptionalTool & { getDebug: (ctx: ExtensionContext) => Promise<ImageGenerationDebug> } {
   let lastStatus: string | undefined;
   let lastError: string | undefined;
 
@@ -581,7 +582,7 @@ export function registerOpenAIImage(
     },
   });
 
-  pi.registerTool({
+  const tool = registerOptionalTool(pi, {
     name: OPENAI_IMAGE_TOOL,
     label: "OpenAI image",
     description:
@@ -616,7 +617,7 @@ export function registerOpenAIImage(
     },
   });
 
-  return { getDebug };
+  return { getDebug, ...tool };
 }
 
 export const _imageTest = {

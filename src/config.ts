@@ -393,7 +393,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     label: "Auto-redeem banked resets",
     currentValue: (cfg) => String(cfg.usage.autoRedeemBankedResets),
     values: ["true", "false"],
-    description: "Redeem one unused banked reset 1 minute before expiry while pi is running.",
+    description: "Redeem one unused banked reset 10 minutes before expiry while pi is running.",
     parse: booleanSetting,
   },
 ];
