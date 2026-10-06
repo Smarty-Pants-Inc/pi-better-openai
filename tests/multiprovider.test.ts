@@ -86,9 +86,7 @@ test("prefers the multiprovider pinned account over registry credentials", async
     source: "multiprovider",
     selection: { providerId: CODEX_PROVIDER_ID, id: "slot_pooled" },
   });
-  expect(service.resolveActiveAccountAuth).toHaveBeenCalledWith(CODEX_PROVIDER_ID, ctx, undefined, {
-    expectedAccountId: "slot_pooled",
-  });
+  expect(service.resolveActiveAccountAuth).toHaveBeenCalledWith(CODEX_PROVIDER_ID, ctx, undefined);
   expect(ctx?.modelRegistry?.getApiKeyForProvider).not.toHaveBeenCalled();
 });
 

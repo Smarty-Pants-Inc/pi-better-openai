@@ -957,7 +957,6 @@ describe("multiprovider resume", () => {
     // The replay then restores the account and tells followers about it.
     service.pin({ "openai-codex": { id: "slot_pinned", label: "Work", authKind: "oauth" } });
     service.resolve(async () => ({
-      id: "slot_pinned",
       accessToken: codexJwt("acct_pinned"),
       label: "Work",
       source: "Work · Codex OAuth",
@@ -973,7 +972,6 @@ describe("multiprovider resume", () => {
       "openai-codex",
       harness.ctx,
       expect.anything(),
-      { expectedAccountId: "slot_pinned" },
     );
     expect(
       fetchMock.mock.calls.some(

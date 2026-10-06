@@ -12,6 +12,9 @@ import {
   type MultiproviderActiveAccount,
   type MultiproviderService,
 } from "../src/multiprovider.ts";
+import { ResetController } from "../src/reset-controller.ts";
+import * as resetGuard from "../src/reset-guard.ts";
+import { BANKED_RESET_AUTO_REDEEM_LEAD_MS } from "../src/resets.ts";
 import { requestCodexUsage } from "../src/usage.ts";
 import { consumeBankedReset, requestBankedResetCredits } from "../src/resets.ts";
 import { registerOpenAIImage } from "../src/image.ts";
@@ -393,6 +396,113 @@ test.each(["image", "reference", "websearch"])(
     expect(h.fallback).not.toHaveBeenCalled();
   },
 );
+test.each(["preflight", "reserve"])(
+  "real bridge reset switch at %s refuses before consumption",
+  async (stage) => {
+    const h = realBridgeHarness();
+    const controller = new ResetController();
+    let getCount = 0;
+    const network = vi.fn<typeof fetch>(async () => {
+      getCount++;
+      if (stage === "preflight" && getCount === 2) h.change("slot_B");
+      return new Response(
+        JSON.stringify({ credits: [{ id: "credit_A", status: "available" }], available_count: 1 }),
+      );
+    });
+    vi.stubGlobal("fetch", network);
+    const reserve = vi.spyOn(resetGuard, "reserveBankedResetRedemption").mockImplementation(() => {
+      if (stage === "reserve") h.change("slot_B");
+      return true;
+    });
+    try {
+      await controller.refresh(h.ctx);
+      expect(controller.snapshot?.credentials.selection?.id).toBe("slot_A");
+      await expect(controller.redeem(h.ctx, "credit_A")).rejects.toBeInstanceOf(
+        CodexIdentityRefusedError,
+      );
+      expect(network).toHaveBeenCalledTimes(2); // only A's initial and exact-credit GETs
+      for (const [, init] of network.mock.calls) {
+        expect(init?.method).not.toBe("POST");
+        expect(init?.headers).toMatchObject({ "chatgpt-account-id": "acct_A" });
+      }
+      if (stage === "preflight") expect(reserve).not.toHaveBeenCalled();
+      else expect(reserve).toHaveBeenCalledExactlyOnceWith("acct_A", "credit_A");
+      expect(h.fallback).not.toHaveBeenCalled();
+    } finally {
+      controller.stop();
+      reserve.mockRestore();
+    }
+  },
+);
+
+test("real bridge manual reset revalidates the exact confirmed credit before reserve", async () => {
+  const h = realBridgeHarness();
+  const controller = new ResetController();
+  const network = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ credits: [{ id: "credit_A", status: "available" }], available_count: 1 }),
+      ),
+    )
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          credits: [{ id: "credit_other", status: "available" }],
+          available_count: 1,
+        }),
+      ),
+    );
+  vi.stubGlobal("fetch", network);
+  const reserve = vi.spyOn(resetGuard, "reserveBankedResetRedemption").mockReturnValue(true);
+  try {
+    await controller.refresh(h.ctx);
+    await expect(controller.redeem(h.ctx, "credit_A")).rejects.toThrow("no longer available");
+    expect(reserve).not.toHaveBeenCalled();
+    expect(network).toHaveBeenCalledTimes(2);
+  } finally {
+    controller.stop();
+    reserve.mockRestore();
+  }
+});
+
+test("real bridge automatic reset retains scheduled A identity after a switch to B", async () => {
+  vi.useFakeTimers();
+  const h = realBridgeHarness();
+  h.ctx.ui = { notify: vi.fn() } as unknown as ExtensionContext["ui"];
+  const controller = new ResetController(() => true);
+  const network = vi.fn<typeof fetch>(
+    async () =>
+      new Response(
+        JSON.stringify({
+          credits: [
+            {
+              id: "credit_A",
+              status: "available",
+              expires_at: Date.now() + BANKED_RESET_AUTO_REDEEM_LEAD_MS + 1000,
+            },
+          ],
+          available_count: 1,
+        }),
+      ),
+  );
+  vi.stubGlobal("fetch", network);
+  const reserve = vi.spyOn(resetGuard, "reserveBankedResetRedemption").mockReturnValue(true);
+  try {
+    controller.start(h.ctx);
+    await controller.refresh(h.ctx);
+    expect(controller.snapshot?.credentials.selection?.id).toBe("slot_A");
+    h.change("slot_B");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(network).toHaveBeenCalledTimes(1); // no B lookup or consume
+    expect(reserve).not.toHaveBeenCalled();
+    expect(h.fallback).not.toHaveBeenCalled();
+  } finally {
+    controller.stop();
+    reserve.mockRestore();
+    vi.useRealTimers();
+  }
+});
 type Tool = {
   name: string;
   execute: (

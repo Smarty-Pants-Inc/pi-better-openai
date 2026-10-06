@@ -315,9 +315,14 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       setActiveMultiproviderService(value);
       const unsubscribers = CHATGPT_PROVIDER_IDS.map((providerId) =>
         value.onActiveAccountChanged(providerId, (event) => {
-          void usageController.refresh(event.ctx, undefined, { force: true });
-          void resetController.refresh(event.ctx, { force: true }).catch(() => {});
-          updateFooter(event.ctx);
+          // The real bridge iterates a live listener Set. Start resolutions after
+          // delivery so their temporary listeners do not see this already-applied
+          // switch as a new change during their pin/auth window.
+          queueMicrotask(() => {
+            void usageController.refresh(event.ctx, undefined, { force: true });
+            void resetController.refresh(event.ctx, { force: true }).catch(() => {});
+            updateFooter(event.ctx);
+          });
         }),
       );
       unsubscribeMultiprovider = () => {
@@ -483,16 +488,19 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       ctx.ui.notify("/openai-resets requires an interactive TUI session.", "warning");
       return;
     }
-    let credits = resetController.snapshot?.credits;
-    if (!credits) {
+    let snapshot = resetController.snapshot;
+    if (!snapshot) {
       await resetController.refresh(ctx, { force: true }).catch(() => {});
-      credits = resetController.snapshot?.credits;
+      snapshot = resetController.snapshot;
     }
-    if (!credits) {
+    if (!snapshot) {
       const reason = resetController.lastError;
       ctx.ui.notify(`Banked reset lookup failed${reason ? `: ${reason}` : "."}`, "error");
       return;
     }
+    // Keep the original cache identity across picker/confirmation awaits, even
+    // if a switch callback refreshes the controller to another account.
+    const { credits, credentials } = snapshot;
     void resetController.refresh(ctx).catch(() => {});
     if (credits.availableCount <= 0) {
       ctx.ui.notify("No banked Codex resets are available for this account.", "info");
@@ -529,7 +537,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       return;
     }
     try {
-      const result = await resetController.redeem(ctx, selected.id);
+      const result = await resetController.redeem(ctx, selected.id, credentials);
       const outcome = formatConsumeOutcome(result);
       ctx.ui.notify(outcome.message, outcome.level);
       void usageController.refresh(ctx, ctx.model?.id, { force: true });
