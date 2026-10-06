@@ -7,11 +7,10 @@ export const RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limi
 export const CONSUME_RESET_URL =
   "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
 
-// Auto-redeem fires in the final minute before expiry. The automatic flow
-// (credentials, a fresh credit re-check, reservation, and consume POST) shares
-// one 10s abort deadline, so a 60s lead still leaves the server tens of seconds
-// of headroom while spending the credit as late as safely possible.
-export const BANKED_RESET_AUTO_REDEEM_LEAD_MS = 60_000;
+// Auto-redeem fires ten minutes before expiry to leave more headroom than a
+// last-minute attempt. The automatic flow (credentials, a fresh credit re-check,
+// reservation, and consume POST) still shares one 10s abort deadline.
+export const BANKED_RESET_AUTO_REDEEM_LEAD_MS = 10 * 60_000;
 
 export type BankedResetStatus = "available" | "redeeming" | "redeemed" | "unknown";
 

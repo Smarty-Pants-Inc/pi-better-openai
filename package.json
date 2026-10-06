@@ -1,6 +1,6 @@
 {
   "name": "@monotykamary/pi-better-openai",
-  "version": "0.2.9",
+  "version": "0.2.12",
   "description": "Improve OpenAI in pi with fast mode, usage stats, image generation, and footer polish.",
   "keywords": [
     "fast",
@@ -58,9 +58,9 @@
     "sharp": "0.35.5"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "1.0.0",
-    "@earendil-works/pi-coding-agent": "1.0.0",
-    "@earendil-works/pi-tui": "1.0.0",
+    "@earendil-works/pi-ai": "1.0.2",
+    "@earendil-works/pi-coding-agent": "1.0.2",
+    "@earendil-works/pi-tui": "1.0.2",
     "@types/node": "~22.19.0",
     "oxfmt": "^0.47.0",
     "oxlint": "^1.62.0",
@@ -73,8 +73,8 @@
     "@earendil-works/pi-tui": "*"
   },
   "overrides": {
-    "@earendil-works/pi-agent-core": "1.0.0",
-    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-agent-core": "1.0.2",
+    "@earendil-works/pi-ai": "1.0.2",
     "brace-expansion": "5.0.12",
     "nanoid": "3.3.18",
     "postcss": "8.5.25",

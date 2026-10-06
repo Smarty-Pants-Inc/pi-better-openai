@@ -6,6 +6,9 @@ import { piAgentDir } from "./paths.ts";
 
 export const AUTH_FILE = join(piAgentDir(), "auth.json");
 
+export const CODEX_AUTH_REQUIRED =
+  "Missing openai-codex OAuth credentials. Run /login openai-codex for this Codex backend feature. /login openai uses separate ChatGPT subscription credentials for api.openai.com.";
+
 export type CodexCredentials = {
   accessToken: string;
   accountId: string;
@@ -145,6 +148,8 @@ export async function getCodexCredentials(
       // Fall back to pi-owned credential resolution.
     }
   }
+  // Deliberately do not fall back to "openai": its direct ChatGPT OAuth grant
+  // targets api.openai.com, not the legacy chatgpt.com/backend-api endpoints.
   const registryRequest = ctx?.modelRegistry?.getApiKeyForProvider(CODEX_PROVIDER_ID);
   const registryToken = registryRequest
     ? await waitForSignal(
