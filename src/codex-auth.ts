@@ -192,73 +192,99 @@ export async function resolveCodexIdentity(
   if (service) {
     if (!ctx) return { kind: "refuse", reason: "selected-unresolved" };
     const modelProvider = ctx.model?.provider;
-    let pins: Map<string, MultiproviderActiveAccount>;
+    let changed = false;
+    const unsubscribe: (() => void)[] = [];
     try {
-      pins = await readSelections(service, ctx, signal);
-    } catch {
-      throwIfAborted(signal);
-      return { kind: "refuse", reason: "selected-unresolved" };
-    }
-    const pool =
-      modelProvider && pins.has(modelProvider)
-        ? modelProvider
-        : pins.size === 1
-          ? [...pins.keys()][0]
-          : undefined;
-    if (pins.size && !pool) return { kind: "refuse", reason: "selected-ambiguous" };
-    if (pool) {
-      // Native openai OAuth belongs to api.openai.com, even if it contains an account-id claim.
-      if (pool !== CODEX_PROVIDER_ID)
-        return { kind: "refuse", reason: "selected-provider-incompatible", selectedPool: pool };
-      const expectedId = pins.get(pool)!.id;
-      try {
-        const resolved = await waitForSignal(
-          service.resolveActiveAccountAuth(pool, ctx, signal, { expectedAccountId: expectedId }),
-          signal,
+      // Subscribe before reading pins, through the final re-read. This also
+      // detects A -> B -> A while a real bridge refresh is pending.
+      for (const provider of CHATGPT_PROVIDER_IDS)
+        unsubscribe.push(
+          service.onActiveAccountChanged(provider, () => {
+            changed = true;
+          }),
         );
-        throwIfAborted(signal);
-        if (!resolved || resolved.id !== expectedId)
-          return { kind: "refuse", reason: "selected-unresolved", selectedPool: pool };
-        const current = await readSelections(service, ctx, signal);
-        if (
-          getActiveMultiproviderService() !== service ||
-          ctx.model?.provider !== modelProvider ||
-          current.size !== pins.size ||
-          [...pins].some(([provider, account]) => current.get(provider)?.id !== account.id)
-        )
-          return { kind: "refuse", reason: "selected-unresolved", selectedPool: pool };
-        const accountId = extractAccountIdFromJwt(resolved.accessToken);
-        if (!accountId)
-          return { kind: "refuse", reason: "selected-no-account-id", selectedPool: pool };
-        return {
-          kind: "selected",
-          credentials: {
-            accessToken: resolved.accessToken,
-            accountId,
-            source: "multiprovider",
-            selection: { providerId: pool, id: expectedId },
-          },
-        };
+      let pins: Map<string, MultiproviderActiveAccount>;
+      try {
+        pins = await readSelections(service, ctx, signal);
+        if (changed) return { kind: "refuse", reason: "selected-unresolved" };
       } catch {
         throwIfAborted(signal);
-        return { kind: "refuse", reason: "selected-unresolved", selectedPool: pool };
-      }
-    }
-    // No pin was observed. Recheck after default resolution so a concurrent switch cannot fall through.
-    const result = await resolveDefaultCodexCredentials(ctx, signal);
-    try {
-      const current = await readSelections(service, ctx, signal);
-      if (
-        current.size ||
-        getActiveMultiproviderService() !== service ||
-        ctx.model?.provider !== modelProvider
-      )
         return { kind: "refuse", reason: "selected-unresolved" };
+      }
+      const pool =
+        modelProvider && pins.has(modelProvider)
+          ? modelProvider
+          : pins.size === 1
+            ? [...pins.keys()][0]
+            : undefined;
+      if (pins.size && !pool) return { kind: "refuse", reason: "selected-ambiguous" };
+      if (pool) {
+        // Native openai OAuth belongs to api.openai.com, even if it contains an account-id claim.
+        if (pool !== CODEX_PROVIDER_ID)
+          return { kind: "refuse", reason: "selected-provider-incompatible", selectedPool: pool };
+        const expectedId = pins.get(pool)!.id;
+        try {
+          const resolved = await waitForSignal(
+            service.resolveActiveAccountAuth(pool, ctx, signal),
+            signal,
+          );
+          throwIfAborted(signal);
+          if (!resolved || (resolved.id !== undefined && resolved.id !== expectedId))
+            return { kind: "refuse", reason: "selected-unresolved", selectedPool: pool };
+          const current = await readSelections(service, ctx, signal);
+          if (
+            changed ||
+            getActiveMultiproviderService() !== service ||
+            ctx.model?.provider !== modelProvider ||
+            current.size !== pins.size ||
+            [...pins].some(([provider, account]) => current.get(provider)?.id !== account.id)
+          )
+            return { kind: "refuse", reason: "selected-unresolved", selectedPool: pool };
+          const accountId = extractAccountIdFromJwt(resolved.accessToken);
+          if (!accountId)
+            return { kind: "refuse", reason: "selected-no-account-id", selectedPool: pool };
+          return {
+            kind: "selected",
+            credentials: {
+              accessToken: resolved.accessToken,
+              accountId,
+              source: "multiprovider",
+              selection: { providerId: pool, id: expectedId },
+            },
+          };
+        } catch {
+          throwIfAborted(signal);
+          return { kind: "refuse", reason: "selected-unresolved", selectedPool: pool };
+        }
+      }
+      // No pin was observed. Recheck after default resolution so a concurrent switch cannot fall through.
+      const result = await resolveDefaultCodexCredentials(ctx, signal);
+      try {
+        const current = await readSelections(service, ctx, signal);
+        if (
+          changed ||
+          current.size ||
+          getActiveMultiproviderService() !== service ||
+          ctx.model?.provider !== modelProvider
+        )
+          return { kind: "refuse", reason: "selected-unresolved" };
+      } catch {
+        throwIfAborted(signal);
+        return { kind: "refuse", reason: "selected-unresolved" };
+      }
+      return result;
     } catch {
       throwIfAborted(signal);
       return { kind: "refuse", reason: "selected-unresolved" };
+    } finally {
+      for (const off of unsubscribe) {
+        try {
+          off();
+        } catch {
+          /* A broken bridge cleanup must not enable fallback. */
+        }
+      }
     }
-    return result;
   }
   const result = await resolveDefaultCodexCredentials(ctx, signal);
   if (getActiveMultiproviderService()) return { kind: "refuse", reason: "selected-unresolved" };

@@ -62,14 +62,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test.each(["undefined", "throw", "unbound", "mismatch", "accountless"])(
+test.each(["undefined", "throw", "mismatch", "accountless"])(
   "a selected %s resolution refuses without fallback",
   async (mode) => {
     const h = harness();
     h.resolve.mockImplementation(async () => {
       if (mode === "throw") throw new Error("unresolved pool");
       if (mode === "undefined") return undefined;
-      if (mode === "unbound") return { accessToken: jwt("acct_A"), label: "Shared" };
       if (mode === "mismatch") return bound("slot_B");
       return { ...bound(), accessToken: "direct-or-api-key-without-account" };
     });
@@ -88,9 +87,7 @@ test("a same-account label rename succeeds, bound to slot id rather than JWT acc
     kind: "selected",
     credentials: { accountId: "acct_A", selection: { id: "slot_A" } },
   });
-  expect(h.resolve).toHaveBeenCalledWith("openai-codex", h.ctx, undefined, {
-    expectedAccountId: "slot_A",
-  });
+  expect(h.resolve).toHaveBeenCalledWith("openai-codex", h.ctx, undefined);
   expect(h.fallback).not.toHaveBeenCalled();
 });
 
@@ -259,6 +256,143 @@ test("pinned reset auth also refuses an unresolved pool, rather than falling bac
   expect(network).not.toHaveBeenCalled();
 });
 
+// Faithful announcement contract: resolution looks up the active slot internally,
+// refresh failures become undefined, and successful auth has NO stable id.
+function realBridgeHarness() {
+  const h = harness();
+  const listeners = new Map<
+    string,
+    Set<Parameters<MultiproviderService["onActiveAccountChanged"]>[1]>
+  >();
+  h.service.onActiveAccountChanged = (provider, callback) => {
+    const callbacks = listeners.get(provider) ?? new Set();
+    listeners.set(provider, callbacks);
+    callbacks.add(callback);
+    return () => {
+      callbacks.delete(callback);
+    };
+  };
+  const change = (id: string) => {
+    const account = pin(id);
+    h.pins({ "openai-codex": account });
+    for (const callback of listeners.get("openai-codex") ?? [])
+      callback({ providerId: "openai-codex", account, ctx: h.ctx });
+  };
+  let refresh: () => Promise<string | undefined> = async () => jwt("acct_A");
+  h.resolve.mockImplementation(async (provider, ctx) => {
+    const active = await h.service.getActiveAccount(provider, ctx);
+    if (!active) return undefined;
+    try {
+      const accessToken = await refresh();
+      if (!accessToken?.trim()) return undefined;
+      return { accessToken: accessToken.trim(), label: active.label, source: "oauth" };
+    } catch {
+      return undefined;
+    }
+  });
+  return {
+    ...h,
+    change,
+    refresh: (next: typeof refresh) => {
+      refresh = next;
+    },
+    listenerCount: () =>
+      [...listeners.values()].reduce((sum, callbacks) => sum + callbacks.size, 0),
+  };
+}
+
+test("real bridge auth without id accepts the unchanged selected A and unsubscribes", async () => {
+  const h = realBridgeHarness();
+  expect(await requireCodexCredentials(h.ctx, "/probe")).toMatchObject({
+    accountId: "acct_A",
+    selection: { providerId: "openai-codex", id: "slot_A" },
+  });
+  expect(h.fallback).not.toHaveBeenCalled();
+  expect(h.listenerCount()).toBe(0);
+});
+
+test.each([false, true])(
+  "real bridge switch during resolve refuses (switch back: %s)",
+  async (back) => {
+    const h = realBridgeHarness();
+    h.refresh(async () => {
+      h.change("slot_B");
+      if (back) h.change("slot_A");
+      return jwt("acct_A");
+    });
+    await expect(requireCodexCredentials(h.ctx, "/probe")).rejects.toBeInstanceOf(
+      CodexIdentityRefusedError,
+    );
+    expect(h.fallback).not.toHaveBeenCalled();
+    expect(h.listenerCount()).toBe(0);
+  },
+);
+
+test.each(["undefined", "refresh-error"])(
+  "real bridge selected A %s blocks usage and reset with usable B registry",
+  async (mode) => {
+    const h = realBridgeHarness();
+    h.refresh(async () => {
+      if (mode === "refresh-error") throw new Error("refresh failed");
+      return undefined;
+    });
+    h.fallback.mockResolvedValue(JSON.stringify({ access: jwt("acct_B"), accountId: "acct_B" }));
+    const network = vi.fn();
+    vi.stubGlobal("fetch", network);
+    await expect(requestCodexUsage(h.ctx)).rejects.toBeInstanceOf(CodexIdentityRefusedError);
+    await expect(requestBankedResetCredits(h.ctx)).rejects.toBeInstanceOf(
+      CodexIdentityRefusedError,
+    );
+    await expect(consumeBankedReset(h.ctx, "credit_A", "request_A")).rejects.toBeInstanceOf(
+      CodexIdentityRefusedError,
+    );
+    expect(network).not.toHaveBeenCalled();
+    expect(h.fallback).not.toHaveBeenCalled();
+    expect(h.listenerCount()).toBe(0);
+  },
+);
+
+test.each(["image", "reference", "websearch"])(
+  "real bridge unresolved A refuses %s without any B requests",
+  async (feature) => {
+    const h = realBridgeHarness();
+    h.refresh(async () => undefined);
+    h.fallback.mockResolvedValue(JSON.stringify({ access: jwt("acct_B"), accountId: "acct_B" }));
+    const network = vi.fn();
+    vi.stubGlobal("fetch", network);
+    let tool: Tool | undefined;
+    const pi = {
+      registerTool: (next: Tool) => {
+        tool = next;
+      },
+      registerCommand: vi.fn(),
+      registerMessageRenderer: vi.fn(),
+      registerEntryRenderer: vi.fn(),
+    } as unknown as ExtensionAPI;
+    const defaults = makeResolvedConfig();
+    const config = makeResolvedConfig({
+      image: { ...defaults.image, enabled: true },
+      websearch: { ...defaults.websearch, enabled: true },
+    });
+    h.ctx.ui = { notify: vi.fn() } as unknown as ExtensionContext["ui"];
+    h.ctx.cwd = "/synthetic-never-written";
+    if (feature === "websearch") registerOpenAIWebSearch(pi, () => config);
+    else registerOpenAIImage(pi, () => config);
+    if (!tool) throw new Error("Expected registered tool");
+    const params =
+      feature === "websearch"
+        ? { query: "synthetic" }
+        : {
+            prompt: "synthetic",
+            ...(feature === "reference" ? { images: ["/synthetic-must-not-be-read.png"] } : {}),
+          };
+    await expect(
+      tool.execute("synthetic", params, undefined, undefined, h.ctx),
+    ).rejects.toBeInstanceOf(CodexIdentityRefusedError);
+    expect(network).not.toHaveBeenCalled();
+    expect(h.fallback).not.toHaveBeenCalled();
+  },
+);
 type Tool = {
   name: string;
   execute: (

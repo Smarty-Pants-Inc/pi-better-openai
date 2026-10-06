@@ -14,7 +14,7 @@ export type MultiproviderActiveAccount = {
 };
 
 export type MultiproviderAccountAuth = {
-  /** Stable pool slot that actually supplied this token. Legacy bridges omit it and fail closed for pins. */
+  /** Optional stable pool slot; when present it must match the observed selection. */
   id?: string;
   accessToken: string;
   label: string;
@@ -41,8 +41,6 @@ export type MultiproviderService = {
     providerId: string,
     ctx: MultiproviderServiceContext,
     signal?: AbortSignal,
-    /** The bridge must atomically bind resolution to this slot, or return undefined. */
-    binding?: { expectedAccountId: string },
   ): Promise<MultiproviderAccountAuth | undefined>;
   onActiveAccountChanged(
     providerId: string,
