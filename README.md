@@ -30,8 +30,9 @@ Usage display, image generation, and web search require pi's ChatGPT OAuth crede
 
 ## Features
 
-- GPT-6 Astra and Daybreak Blue/Red model fallbacks for the built-in `openai-codex` provider.
-- Fast mode for supported OpenAI models, toggled with `/fast` or in `/openai-settings`.
+- GPT-6.1 Sol, GPT-6 Astra, and Daybreak Blue/Red model fallbacks for the built-in `openai-codex` provider.
+- Standard, Fast, and capability-gated Ultrafast service tiers via `/openai-tier` or `/openai-settings`; `/fast` remains a quick Fast toggle.
+- Opt-in typed decisions through `openai_decide`, using an explicitly selected Pi classifier provider (including Jev). Native OpenAI Decisions remains gated on a published adapter.
 - OpenAI subscription usage display via `/openai-usage` and the footer.
 - Interactive settings picker via `/openai-settings`.
 - Footer customization for model, thinking, fast mode, usage, and token/cost context.
@@ -39,7 +40,9 @@ Usage display, image generation, and web search require pi's ChatGPT OAuth crede
 - Live web search through the `openai_websearch` tool and `/openai-websearch` command, backed by the ChatGPT Codex search backend.
 - Animated Codex custom pets rendered in the Better OpenAI footer.
 - Commands:
-  - `/fast` toggles fast mode.
+  - `/fast` toggles Fast and Standard; it never enables Ultrafast.
+  - `/openai-tier [standard|fast|ultrafast]` shows or selects the requested service tier.
+  - `/openai-decisions [models|use provider/model|off]` inspects or configures typed decisions.
   - `/openai-image <prompt>` generates an image directly.
   - `/openai-websearch <query>` searches the web and inserts the cited answer into the session.
   - `/pets [help|list|wake [slug]|tuck|select <slug>]` renders or manages custom pets from `${CODEX_HOME:-~/.codex}/pets`.
@@ -78,7 +81,14 @@ Default supported models:
 [
   "openai/gpt-5.4",
   "openai/gpt-5.5",
+  "openai/gpt-6-astra",
+  "openai/gpt-6.1-sol",
+  "openai/gpt-6-sol",
+  "openai/gpt-6-luna",
   "openai-codex/gpt-6-astra",
+  "openai-codex/gpt-6.1-sol",
+  "openai-codex/gpt-6-sol",
+  "openai-codex/gpt-6-luna",
   "openai-codex/gpt-5.6-sol",
   "openai-codex/gpt-5.6-terra",
   "openai-codex/gpt-5.6-luna",
@@ -93,8 +103,12 @@ Example config:
 {
   "persistState": true,
   "notifyOnModelSwitch": true,
-  "desiredActive": false,
-  "supportedModels": ["openai/gpt-5.5", "openai-codex/gpt-5.5"],
+  "serviceTier": "standard",
+  "decisions": {
+    "enabled": false,
+    "model": "",
+    "timeoutMs": 10000
+  },
   "usage": {
     "enabled": true,
     "refreshIntervalMs": 60000,
@@ -127,9 +141,56 @@ Example config:
 }
 ```
 
+## Service tiers
+
+`/openai-tier fast` requests `service_tier: "priority"`. `/openai-tier standard` explicitly requests `"default"`, clearing an inherited Fast/Ultrafast request tier on OpenAI providers. Legacy disabled configurations without an explicit tier leave payloads untouched. `/fast` and the `--fast` flag never select Ultrafast.
+
+`/openai-tier ultrafast` explicitly opts into **6x Standard token prices** for `openai/gpt-6-astra` over the Responses API. Only the documented global (`https://api.openai.com/v1`) and US (`https://us.api.openai.com/v1`) endpoints are enabled. EU/regional endpoints, custom proxies, other models, and Codex subscription Ultrafast are not enabled without verified support. This does not promise account entitlement or available rate limits. Unsupported selections remain requested but inactive; the extension does not inject a lower-tier fallback or retry a rejected request.
+
+The footer shows `fast` or `ultrafast` only when supported by the current model. Diagnostics distinguish the requested tier and last injected payload from server-confirmed service or billing. **Pi's host cost estimates may omit the Ultrafast premium**; use OpenAI billing for actual charges. The host's native transport is preserved; WebSockets are recommended by OpenAI but HTTP is also supported. See [Ultrafast documentation](https://developers.openai.com/api/docs/guides/ultrafast-mode) and [pricing](https://developers.openai.com/api/docs/pricing?latest-pricing=ultrafast).
+
+`serviceTier` takes precedence over legacy `desiredActive`/`active` within each config layer; project state still overrides global state. `persistState: false` keeps tier changes session-only. `supportedModels` overrides the Fast allowlist, not Ultrafast capabilities. Unknown config fields and customized model lists are preserved.
+
+## Typed decisions
+
+The `openai_decide` tool returns typed judgments through Pi's classifier API, **not chat completions**. It is disabled by default and never chooses a provider automatically. To use an existing Jev classifier explicitly:
+
+```text
+/openai-decisions models
+/openai-decisions use typesafe/jev-latest
+```
+
+Configure that provider's credentials through Pi (for example, `TYPESAFE_API_KEY` for TypeSafe). The model list shows registered classifiers, not guaranteed credentials or entitlement. `/openai-decisions use` saves the selected model and enables decisions in the active project/global config; `/openai-decisions off` disables requests. These settings are independent of service-tier persistence. Provider-qualified IDs containing further slashes, such as `openrouter/typesafe/jev-1.13`, are supported when registered by the host. Prefer pinned versions for stable evaluations.
+
+**Native OpenAI Decisions is not yet implemented:** as of the September 29, 2026 research checkpoint, no verifiable public endpoint/schema or SDK adapter was found. The bridge accepts OpenAI only once a classifier adapter is registered in Pi; it does not invent an endpoint, forward Codex OAuth to another service, or silently substitute a chat model. See the [integration status and remaining gates](plans/devday-integration.md).
+
+Example tool input:
+
+```json
+{
+  "state": { "testFailure": "connection to local test database timed out" },
+  "questions": {
+    "route": {
+      "type": "choice",
+      "instructions": "Classify the failure for human review.",
+      "criteria": { "environment": "Environment problem", "code": "Code defect" }
+    }
+  }
+}
+```
+
+- `state`: JSON object; send only the necessary context, never credentials or the entire session.
+- `questions`: 1–32 named questions. `choice` uses 2–64 labeled criteria; `bool` uses `true`/`false` criteria; `score` uses 2–64 ordered criteria. Pi maps boolean questions to Jev's `noul` representation.
+- Total input is capped at 64 KiB. `decisions.timeoutMs` defaults to 10000 and is clamped to 1000–60000. Cancellation/deadlines abort the provider request; there are no automatic retries. A timed-out upstream request may still incur charges.
+- Results have `status: "ok"`, provider/model provenance, and typed `answers`; errors have `status: "error"` and mark the tool failed. Structured output is available to programmatic callers. Provider error text is withheld to prevent credential/state leakage.
+- Probabilities and confidence remain uncertain judgments; scores retain their provider-specific scale. No claim of cross-provider calibration is made. Decisions never authorize tools, execute commands, change the active model, or start background polling.
+- Reported classifier token usage/cost is included in tool results and the Better OpenAI footer. Missing usage or catalog pricing is not evidence that a request was free.
+
 ## Codex model fallbacks
 
-The extension adds `gpt-6-astra`, `gpt-daybreak-blue-latest`, and `gpt-daybreak-red-latest` to the built-in `openai-codex` provider without requiring local `models.json` entries. Existing built-in models remain available, and metadata from pi's live catalog takes precedence when pi publishes an official entry with the same ID.
+The extension adds `gpt-6.1-sol`, `gpt-6-astra`, `gpt-daybreak-blue-latest`, and `gpt-daybreak-red-latest` to the built-in `openai-codex` provider without requiring local `models.json` entries. Existing built-in models remain available, and metadata from pi's live catalog takes precedence when pi publishes an official entry with the same ID.
+
+The GPT-6.1 Sol fallback uses Codex's conservative 272K context default, 128K output limit, and published short/long-context pricing. It maps Pi's `minimal` level to `low` and disables `off`; the model does not accept `none` or `minimal` reasoning efforts. See [model documentation](https://developers.openai.com/api/docs/models/gpt-6.1-sol) and the [upstream Codex catalog change](https://github.com/openai/codex/commit/b1e72963c3b71a9265a551e54beff078384efed9).
 
 Daybreak models require separate OpenAI approval and provisioning. pi currently exposes reasoning levels through `max`; Codex's `ultra` automatic-delegation mode is not a pi thinking level.
 

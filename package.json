@@ -1,6 +1,6 @@
 {
   "name": "@monotykamary/pi-better-openai",
-  "version": "0.2.6",
+  "version": "0.2.9",
   "description": "Improve OpenAI in pi with fast mode, usage stats, image generation, and footer polish.",
   "keywords": [
     "fast",
@@ -36,6 +36,8 @@
     "index.ts",
     "src/",
     "README.md",
+    "CHANGELOG.md",
+    "plans/devday-integration.md",
     "LICENSE"
   ],
   "type": "module",
@@ -49,7 +51,8 @@
     "lint": "oxlint --deny-warnings index.ts src/*.ts src/*/*.ts tests/*.ts",
     "lint:fix": "oxlint --fix index.ts src/*.ts src/*/*.ts tests/*.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:pi": "node scripts/test-pi-compat.mjs"
   },
   "dependencies": {
     "sharp": "0.35.4"
@@ -62,7 +65,7 @@
     "oxfmt": "^0.47.0",
     "oxlint": "^1.62.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.11"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "^1.0.0",
@@ -72,7 +75,7 @@
   "overrides": {
     "@earendil-works/pi-agent-core": "1.0.0",
     "@earendil-works/pi-ai": "1.0.0",
-    "brace-expansion": "5.0.11",
+    "brace-expansion": "5.0.12",
     "nanoid": "3.3.18",
     "postcss": "8.5.25",
     "protobufjs": "7.6.5",

@@ -1,8 +1,7 @@
 /**
  * Better OpenAI for pi.
  *
- * Adds `service_tier: "priority"` to OpenAI provider payloads while fast mode is
- * enabled and the selected model is in the configured allow-list.
+ * Adds capability-gated OpenAI service tiers and opt-in native typed decisions.
  */
 import {
   type ExtensionAPI,
@@ -17,6 +16,7 @@ import {
   SettingsList,
   type SettingsListTheme,
 } from "@earendil-works/pi-tui";
+import type { Usage } from "@earendil-works/pi-ai";
 import { registerOpenAICodexModels } from "./src/codex-models.ts";
 import { CONFIG_BASENAME, STATUS_KEY } from "./src/identity.ts";
 import {
@@ -47,6 +47,8 @@ import {
   WEBSEARCH_SETTING_DESCRIPTORS,
   PET_SETTING_DESCRIPTORS,
   FAST_SETTING_DESCRIPTORS,
+  DECISIONS_SETTING_DESCRIPTORS,
+  isServiceTier,
   type SettingsOptionDescriptor,
   configPaths,
   type ResolvedConfig,
@@ -77,6 +79,7 @@ import {
 import { ResetController } from "./src/reset-controller.ts";
 import { registerOpenAIImage, _imageTest } from "./src/image.ts";
 import { registerOpenAIWebSearch, _websearchTest } from "./src/websearch.ts";
+import { registerOpenAIDecisions } from "./src/decisions.ts";
 import {
   type CodexPetPackage,
   codexHome,
@@ -88,7 +91,7 @@ import {
   registerOpenAIPets,
   _petsTest,
 } from "./src/pets.ts";
-import { FastController, modelList, supportsFast } from "./src/fast-controller.ts";
+import { FastController, supportsFast } from "./src/fast-controller.ts";
 import { isOpenAISubscriptionModel, UsageController } from "./src/usage-controller.ts";
 import { PetFooterController } from "./src/pet-footer-controller.ts";
 import {
@@ -340,12 +343,14 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       ...nextConfig,
       active: fastController.active,
       desiredActive: fastController.desiredActive,
+      serviceTier: fastController.desiredTier,
     };
     if (!nextConfig.persistState) return;
     writeConfig(nextConfig.configPath, {
       ...readRawConfig(nextConfig.configPath),
       active: fastController.active,
       desiredActive: fastController.desiredActive,
+      serviceTier: fastController.desiredTier,
     });
   }
 
@@ -370,15 +375,22 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     ctx.ui.notify(fastController.stateText(ctx, nextConfig), "info");
   }
 
+  function addFooterUsage(usage: Usage | undefined): void {
+    if (!usage) return;
+    footerTotals.input += usage.input;
+    footerTotals.output += usage.output;
+    footerTotals.cacheRead += usage.cacheRead;
+    footerTotals.cacheWrite += usage.cacheWrite;
+    footerTotals.cost += usage.cost.total;
+  }
+
   function refreshFooterTotals(ctx: ExtensionContext): void {
     footerTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
     for (const entry of ctx.sessionManager.getEntries()) {
-      if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-      footerTotals.input += entry.message.usage.input;
-      footerTotals.output += entry.message.usage.output;
-      footerTotals.cacheRead += entry.message.usage.cacheRead;
-      footerTotals.cacheWrite += entry.message.usage.cacheWrite;
-      footerTotals.cost += entry.message.usage.cost.total;
+      if (entry.type !== "message") continue;
+      if (entry.message.role === "assistant" || entry.message.role === "toolResult") {
+        addFooterUsage(entry.message.usage);
+      }
     }
   }
 
@@ -435,6 +447,9 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       `Image default save: ${cfg.image.defaultSave}`,
       `Websearch enabled: ${cfg.websearch.enabled}`,
       `Websearch model: ${cfg.websearch.model} (${cfg.websearch.reasoningEffort}/${cfg.websearch.responseLength}, ${cfg.websearch.maxOutputTokens} tokens, ${cfg.websearch.timeoutMs}ms)`,
+      `Decisions enabled: ${cfg.decisions.enabled}`,
+      `Decision classifier: ${cfg.decisions.model || "not selected"} (${cfg.decisions.timeoutMs}ms)`,
+      "Native OpenAI Decisions requires a registered classifier adapter; no chat fallback.",
       `Pet enabled: ${cfg.pets.enabled}`,
       `Pet slug: ${cfg.pets.slug || PET_EMPTY_VALUE}`,
       `Pet placement: ${cfg.pets.placement}`,
@@ -528,6 +543,37 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       const arg = args.trim().toLowerCase();
       if (!arg) return setActive(ctx, !fastController.desiredActive);
       ctx.ui.notify("Usage: /fast", "error");
+    },
+  });
+
+  pi.registerCommand("openai-tier", {
+    description: "Select standard, fast, or ultrafast (API Astra; 6x Standard token prices)",
+    handler: async (args, ctx) => {
+      const tier = args.trim().toLowerCase();
+      if (!tier) {
+        ctx.ui.notify(
+          `Requested tier: ${fastController.desiredTier}. ${fastController.stateText(ctx, config(ctx))}`,
+          "info",
+        );
+        return;
+      }
+      if (!isServiceTier(tier)) {
+        ctx.ui.notify(
+          "Usage: /openai-tier [standard | fast | ultrafast]. Ultrafast explicitly opts into 6x Standard token prices.",
+          "error",
+        );
+        return;
+      }
+      const cfg = refresh(ctx);
+      fastController.setTier(ctx, cfg, tier);
+      persist(cfg);
+      updateFooter(ctx);
+      ctx.ui.notify(
+        fastController.stateText(ctx, cfg),
+        tier === "ultrafast" || (fastController.desiredActive && !fastController.active)
+          ? "warning"
+          : "info",
+      );
     },
   });
 
@@ -794,16 +840,9 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   }
 
   function buildFastSettingsItems(cfg: ResolvedConfig): SettingsPickerItem[] {
-    return [
-      {
-        id: "fast.enabled",
-        label: "Fast mode",
-        currentValue: String(fastController.desiredActive),
-        values: ["true", "false"],
-        description: `Request OpenAI fast mode. Activates for supported models: ${modelList(cfg.supportedModels)}.`,
-      },
-      ...settingsItemsFromDescriptors(FAST_SETTING_DESCRIPTORS, cfg),
-    ];
+    return settingsItemsFromDescriptors(FAST_SETTING_DESCRIPTORS, cfg, {
+      serviceTier: { currentValue: fastController.desiredTier },
+    });
   }
 
   function buildFooterSettingsItems(cfg: ResolvedConfig): SettingsPickerItem[] {
@@ -862,12 +901,13 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     return [
       {
         id: "section.fast",
-        label: "Fast mode",
+        label: "Service tier",
         currentValue: fastSettingsSummary(ctx, cfg),
-        description: "Configure OpenAI fast mode and persistence.",
+        description:
+          "Configure Standard, Fast, Ultrafast, and persistence. Ultrafast costs 6x Standard.",
         submenu: (_value, done) =>
           settingsSubmenu(
-            "Fast mode settings",
+            "Service tier settings",
             () => buildFastSettingsItems(config(ctx)),
             ctx,
             () => done(fastSettingsSummary(ctx, config(ctx))),
@@ -926,6 +966,38 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
           ),
       },
       {
+        id: "section.decisions",
+        label: "Typed decisions",
+        currentValue: cfg.decisions.enabled ? cfg.decisions.model || "model required" : "disabled",
+        description: "Opt-in native classifier requests; no chat fallback or automatic actions.",
+        submenu: (_value, done) =>
+          settingsSubmenu(
+            "Typed decision settings",
+            () => {
+              const next = config(ctx);
+              const models = ctx.modelRegistry.getModelsOfType("classifier");
+              return settingsItemsFromDescriptors(DECISIONS_SETTING_DESCRIPTORS, next, {
+                "decisions.model": {
+                  values: [
+                    ...new Set([
+                      "",
+                      next.decisions.model,
+                      ...models.map((model) => `${model.provider}/${model.id}`),
+                    ]),
+                  ],
+                },
+              });
+            },
+            ctx,
+            () =>
+              done(
+                config(ctx).decisions.enabled
+                  ? config(ctx).decisions.model || "model required"
+                  : "disabled",
+              ),
+          ),
+      },
+      {
         id: "section.pets",
         label: "Footer pet",
         currentValue: petSettingsSummary(cfg),
@@ -977,14 +1049,29 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     const bool = rawValue === "true";
     if (id === "fast.enabled") {
       fastController.setDesired(ctx, cfg, bool);
+    } else if (id === "serviceTier") {
+      if (!isServiceTier(rawValue)) return;
+      fastController.setTier(ctx, cfg, rawValue);
+      ctx.ui.notify(
+        fastController.stateText(ctx, cfg),
+        rawValue === "ultrafast" || (fastController.desiredActive && !fastController.active)
+          ? "warning"
+          : "info",
+      );
     }
     const petKey = id.startsWith("pets.") ? id.slice("pets.".length) : undefined;
     const nextRawConfig = applySettingToRawConfig(current, id, rawValue, {
       persistState: cfg.persistState,
       active: fastController.active,
       desiredActive: fastController.desiredActive,
+      serviceTier: fastController.desiredTier,
       petEmptyValue: PET_EMPTY_VALUE,
     });
+    if (id === "persistState" && bool) {
+      nextRawConfig.serviceTier = fastController.desiredTier;
+      nextRawConfig.active = fastController.active;
+      nextRawConfig.desiredActive = fastController.desiredActive;
+    }
     if (petKey) {
       if (petKey === "enabled" || petKey === "sizeCells" || petKey === "slug")
         petController.invalidateLoadKey();
@@ -1081,6 +1168,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
 
   registerOpenAIImage(pi, config);
   registerOpenAIWebSearch(pi, config);
+  registerOpenAIDecisions(pi, config, refresh);
   registerOpenAIPets(pi, {
     wake: async (ctx, slug) => {
       const pets = await listCodexPets();
@@ -1248,8 +1336,9 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
 
           const modelName = ctx.model?.id || "no-model";
           const thinkingLevel = pi.getThinkingLevel();
-          const fastSuffix =
-            fastController.active && supportsFast(ctx, cfg.supportedModels) ? " fast" : "";
+          const fastSuffix = fastController.statusSegment(ctx, cfg)
+            ? ` ${fastController.desiredTier}`
+            : "";
           let rightWithoutProvider = modelName;
           if (ctx.model?.reasoning) {
             rightWithoutProvider =
@@ -1426,7 +1515,9 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     fastController.initializeForSession(ctx, nextConfig, pi.getFlag(FLAG) === true);
     if (
       fastController.desiredActive !== nextConfig.desiredActive ||
-      fastController.active !== nextConfig.active
+      fastController.active !== nextConfig.active ||
+      fastController.desiredTier !==
+        (nextConfig.serviceTier ?? (nextConfig.desiredActive ? "fast" : "standard"))
     )
       persist(nextConfig);
     if (hasTerminalUI(ctx)) petController.installResizeGuard(ctx);
@@ -1467,11 +1558,8 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   pi.on("turn_end", (event, ctx) => {
     invalidateContextUsage();
     if (event.message?.role === "assistant") {
-      footerTotals.input += event.message.usage.input;
-      footerTotals.output += event.message.usage.output;
-      footerTotals.cacheRead += event.message.usage.cacheRead;
-      footerTotals.cacheWrite += event.message.usage.cacheWrite;
-      footerTotals.cost += event.message.usage.cost.total;
+      addFooterUsage(event.message.usage);
+      for (const result of event.toolResults ?? []) addFooterUsage(result.usage);
     } else refreshFooterTotals(ctx);
     updateFooter(ctx);
     void usageController.refresh(ctx);
