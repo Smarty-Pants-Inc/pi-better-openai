@@ -26,6 +26,7 @@ export type BankedResetCache = {
 // redemption revalidates one exact credit and pins its account for the POST.
 export class ResetController {
   private cache: BankedResetCache | undefined;
+  private cacheAccountId: string | undefined;
   private error: string | undefined;
   private lastFetchAt: number | undefined;
   private inFlight: Promise<void> | undefined;
@@ -85,7 +86,18 @@ export class ResetController {
     const signal = this.requestSignal(ctx);
     const task = (async () => {
       try {
-        const credits = await requestBankedResetCredits(ctx, signal);
+        const credentials = await getCodexCredentials(ctx, signal);
+        if (signal.aborted || generation !== this.generation) return;
+        if (credentials?.accountId !== this.cacheAccountId) {
+          // Exact-credit retention is only valid within the same account.
+          this.clearAutoTimer();
+          this.cache = undefined;
+          this.blockedUntilMs = 0;
+          this.cacheAccountId = credentials?.accountId;
+        }
+        const credits = credentials
+          ? await requestBankedResetCredits(ctx, signal, credentials)
+          : undefined;
         if (signal.aborted || generation !== this.generation) return;
         if (credits) {
           this.cache = { credits, updatedAt: Date.now() };
@@ -170,6 +182,8 @@ export class ResetController {
       // A cache refresh must not replace a due timer with the next credit,
       // particularly when the scheduled one was redeemed in another client.
       if (this.autoTimer) return;
+      const accountId = this.cacheAccountId;
+      if (!accountId) return;
       const credit = scheduled ?? selectAutoRedeemCredit(this.cache?.credits.credits ?? []);
       if (!credit || credit.expiresAtMs === null) return;
       const dueAt = Math.max(
@@ -181,8 +195,9 @@ export class ResetController {
           this.autoTimer = undefined;
           // Preserve the exact credit across capped timer wakeups, even when
           // a polling refresh has changed the cached credit list.
+          if (accountId !== this.cacheAccountId) return;
           if (Date.now() < dueAt) this.scheduleAutoRedeem(credit);
-          else void this.autoRedeem(ctx, credit);
+          else void this.autoRedeem(ctx, credit, accountId);
         },
         Math.max(0, Math.min(dueAt - Date.now(), BANKED_RESET_CACHE_TTL_MS)),
       );
@@ -193,7 +208,11 @@ export class ResetController {
     }
   }
 
-  private async autoRedeem(ctx: ExtensionContext, scheduled: BankedResetCredit): Promise<void> {
+  private async autoRedeem(
+    ctx: ExtensionContext,
+    scheduled: BankedResetCredit,
+    accountId: string,
+  ): Promise<void> {
     const generation = this.generation;
     let ownsRedemption = false;
     try {
@@ -205,9 +224,15 @@ export class ResetController {
       this.blockedUntilMs = Date.now() + BANKED_RESET_AUTO_REDEEM_LEAD_MS;
       const signal = this.requestSignal(ctx);
       const credentials = await getCodexCredentials(ctx, signal);
-      if (!credentials) return;
+      if (!credentials || credentials.accountId !== accountId) return;
       const fresh = await requestBankedResetCredits(ctx, signal, credentials);
-      if (signal.aborted || generation !== this.generation || !this.canAutoRedeem(ctx)) return;
+      if (
+        signal.aborted ||
+        generation !== this.generation ||
+        accountId !== this.cacheAccountId ||
+        !this.canAutoRedeem(ctx)
+      )
+        return;
       if (!fresh) return;
       this.cache = { credits: fresh, updatedAt: Date.now() };
       this.error = undefined;
@@ -265,6 +290,8 @@ export class ResetController {
     this.stop();
     this.lifetime = new AbortController();
     this.cache = undefined;
+    this.cacheAccountId = undefined;
+    this.blockedUntilMs = 0;
     this.lastFetchAt = undefined;
     if (ctx.signal?.aborted) return;
     this.activeCtx = ctx;
