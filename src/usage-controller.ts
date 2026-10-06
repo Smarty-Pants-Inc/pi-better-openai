@@ -14,7 +14,7 @@ import {
   usageSegments,
 } from "./usage.ts";
 import { currentModelKey } from "./fast-controller.ts";
-import { CODEX_AUTH_REQUIRED } from "./codex-auth.ts";
+import { CODEX_AUTH_REQUIRED, CodexIdentityRefusedError } from "./codex-auth.ts";
 
 export function isOpenAISubscriptionModel(
   ctx: ExtensionContext,
@@ -233,6 +233,10 @@ export class UsageController {
     } catch (error) {
       if (this.handleStaleContextError(error, generation) || !this.isGenerationCurrent(generation))
         return;
+      if (error instanceof CodexIdentityRefusedError) {
+        this.usageSnapshot = undefined;
+        this.usageUpdatedAt = undefined;
+      }
       this.usageError = sanitizeDiagnosticError(
         error instanceof Error ? error.message : String(error),
       );

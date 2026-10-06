@@ -1,5 +1,10 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CODEX_AUTH_REQUIRED, getCodexCredentials } from "./codex-auth.ts";
+import {
+  CODEX_AUTH_REQUIRED,
+  CodexIdentityRefusedError,
+  getCodexCredentials,
+  requireCodexCredentials,
+} from "./codex-auth.ts";
 import { sanitizeDiagnosticError } from "./format.ts";
 import { reserveBankedResetRedemption } from "./reset-guard.ts";
 import {
@@ -95,6 +100,7 @@ export class ResetController {
         }
       } catch (error) {
         if (generation !== this.generation || signal.aborted) return;
+        if (error instanceof CodexIdentityRefusedError) this.cache = undefined;
         this.error = sanitizeDiagnosticError(
           error instanceof Error ? error.message : String(error),
         );
@@ -128,9 +134,13 @@ export class ResetController {
     this.blockedUntilMs = Date.now() + BANKED_RESET_AUTO_REDEEM_LEAD_MS;
     try {
       const signal = this.requestSignal(ctx);
-      const credentials = await getCodexCredentials(ctx, signal);
+      const credentials = await requireCodexCredentials(
+        ctx,
+        "/openai-resets",
+        CODEX_AUTH_REQUIRED,
+        signal,
+      );
       signal.throwIfAborted();
-      if (!credentials) throw new Error(CODEX_AUTH_REQUIRED);
       if (!reserveBankedResetRedemption(credentials.accountId, creditId))
         throw new Error(
           "A banked reset was already attempted recently; no additional credit was spent.",

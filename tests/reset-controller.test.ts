@@ -17,10 +17,23 @@ import {
 } from "../src/resets.ts";
 
 // Never consult real credentials or send a real request in these tests.
-vi.mock("../src/codex-auth.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/codex-auth.ts")>()),
-  getCodexCredentials: vi.fn(),
-}));
+vi.mock("../src/codex-auth.ts", async (importOriginal) => {
+  const resolve = vi.fn();
+  return {
+    ...(await importOriginal<typeof import("../src/codex-auth.ts")>()),
+    getCodexCredentials: resolve,
+    requireCodexCredentials: async (
+      ctx: unknown,
+      _command: string,
+      missing: string,
+      signal?: AbortSignal,
+    ) => {
+      const credentials = await resolve(ctx, signal);
+      if (!credentials) throw new Error(missing);
+      return credentials;
+    },
+  };
+});
 
 const NOW = Date.parse("2026-09-21T00:00:00Z");
 const LEAD_MS = BANKED_RESET_AUTO_REDEEM_LEAD_MS;

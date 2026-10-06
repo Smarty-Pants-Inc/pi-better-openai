@@ -5,6 +5,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 // credential resolution keeps its standalone behavior.
 export const MULTIPROVIDER_SERVICE_EVENT = "pi-multiprovider:service";
 export const CODEX_PROVIDER_ID = "openai-codex";
+export const CHATGPT_PROVIDER_IDS = ["openai", CODEX_PROVIDER_ID] as const;
 
 export type MultiproviderActiveAccount = {
   id: string;
@@ -13,6 +14,8 @@ export type MultiproviderActiveAccount = {
 };
 
 export type MultiproviderAccountAuth = {
+  /** Stable pool slot that actually supplied this token. Legacy bridges omit it and fail closed for pins. */
+  id?: string;
   accessToken: string;
   label: string;
   source?: string;
@@ -38,6 +41,8 @@ export type MultiproviderService = {
     providerId: string,
     ctx: MultiproviderServiceContext,
     signal?: AbortSignal,
+    /** The bridge must atomically bind resolution to this slot, or return undefined. */
+    binding?: { expectedAccountId: string },
   ): Promise<MultiproviderAccountAuth | undefined>;
   onActiveAccountChanged(
     providerId: string,

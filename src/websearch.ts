@@ -9,7 +9,7 @@ import {
 import {
   type CodexCredentials,
   CODEX_AUTH_REQUIRED,
-  getCodexCredentials,
+  requireCodexCredentials,
   type CodexCredentialsWithSource,
 } from "./codex-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
@@ -108,12 +108,13 @@ async function resolveSearchRoute(
 ): Promise<SearchRoute> {
   const provider = cfg.websearch.provider;
   if (!provider) {
-    const credentials = await getCodexCredentials(ctx, signal);
-    if (credentials) return { url: CODEX_SEARCH_URL, credentials };
-    throw new WebSearchError(
-      "authentication_required",
+    const credentials = await requireCodexCredentials(
+      ctx,
+      "/openai-websearch",
       `${CODEX_AUTH_REQUIRED} Alternatively, set websearch.provider.`,
+      signal,
     );
+    return { url: CODEX_SEARCH_URL, credentials };
   }
   let route: ReturnType<typeof resolveProviderRoute>;
   try {

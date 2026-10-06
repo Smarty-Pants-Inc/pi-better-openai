@@ -65,10 +65,16 @@ test("tracks the active service", () => {
 
 test("prefers the multiprovider pinned account over registry credentials", async () => {
   const service = fakeService(async () => ({
+    id: "slot_pooled",
     accessToken: codexJwt("acct_pooled"),
     label: "Work",
     source: "Work · Codex OAuth",
   }));
+  service.getActiveAccount = vi.fn(async (provider) =>
+    provider === CODEX_PROVIDER_ID
+      ? { id: "slot_pooled", label: "Work", authKind: "oauth" }
+      : undefined,
+  );
   setActiveMultiproviderService(service);
   const ctx = credentialContext();
 
@@ -78,8 +84,11 @@ test("prefers the multiprovider pinned account over registry credentials", async
     accessToken: codexJwt("acct_pooled"),
     accountId: "acct_pooled",
     source: "multiprovider",
+    selection: { providerId: CODEX_PROVIDER_ID, id: "slot_pooled" },
   });
-  expect(service.resolveActiveAccountAuth).toHaveBeenCalledWith(CODEX_PROVIDER_ID, ctx, undefined);
+  expect(service.resolveActiveAccountAuth).toHaveBeenCalledWith(CODEX_PROVIDER_ID, ctx, undefined, {
+    expectedAccountId: "slot_pooled",
+  });
   expect(ctx?.modelRegistry?.getApiKeyForProvider).not.toHaveBeenCalled();
 });
 

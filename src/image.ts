@@ -9,7 +9,7 @@ import { isRecord, normalizeImageModel, type ResolvedConfig } from "./config.ts"
 import {
   CODEX_AUTH_REQUIRED,
   extractAccountIdFromJwt,
-  getCodexCredentials,
+  requireCodexCredentials,
   type CodexCredentialsWithSource,
 } from "./codex-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
@@ -128,9 +128,7 @@ async function getCredentials(
   ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<CodexImageCredentials> {
-  const credentials = await getCodexCredentials(ctx, signal);
-  if (credentials) return credentials;
-  throw new Error(CODEX_AUTH_REQUIRED);
+  return requireCodexCredentials(ctx, "/openai-image", CODEX_AUTH_REQUIRED, signal);
 }
 
 function resolveModel(params: Pick<ToolParams, "model">, cfg: ResolvedConfig): string {
