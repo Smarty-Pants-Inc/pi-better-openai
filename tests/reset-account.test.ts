@@ -134,7 +134,7 @@ test("a scheduled A credit is not consumed under B credentials without a refresh
   expect(posts()).toHaveLength(0);
 });
 
-test("account-change restart discards an old in-flight lookup and its timer", async () => {
+test("account-change notification discards an old in-flight lookup and its timer", async () => {
   await start();
   const pending = vi.getTimerCount();
   let release!: (response: Response) => void;
@@ -149,7 +149,7 @@ test("account-change restart discards an old in-flight lookup and its timer", as
   expect(release).toBeTypeOf("function");
   account = "account-b";
   // This is the account-change callback's cancellation path in index.ts.
-  target.start(ctx);
+  target.accountChanged(ctx);
   await target.refresh(ctx);
   release(
     new Response(
@@ -172,6 +172,90 @@ test("account-change restart discards an old in-flight lookup and its timer", as
   await vi.advanceTimersByTimeAsync(10 * MINUTE);
   expect(posts()).toHaveLength(1);
   expect(JSON.parse(posts()[0]![1]!.body as string).credit_id).toBe("credit-b");
+});
+
+test("same-account re-selection retains the exact credit, even if redeemed elsewhere", async () => {
+  account = "account-b";
+  const implementation = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url, init) => {
+    const response = await implementation(url, init);
+    if (String(url) !== RESET_CREDITS_URL) return response;
+    const payload = await response.json();
+    payload.credits.push({
+      id: "replacement",
+      status: "available",
+      reset_type: "codex_rate_limits",
+      expires_at: NOW + 21 * MINUTE,
+    });
+    return new Response(JSON.stringify(payload), { status: 200 });
+  });
+  await start();
+  await vi.advanceTimersByTimeAsync(4 * MINUTE);
+  expiredElsewhere = true;
+  target.accountChanged(ctx);
+  await target.refresh(ctx);
+  await vi.advanceTimersByTimeAsync(8 * MINUTE);
+  expect(posts()).toHaveLength(0);
+});
+
+test("pending same-account identity resolution cannot replace the retained credit", async () => {
+  account = "account-b";
+  const implementation = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url, init) => {
+    const response = await implementation(url, init);
+    if (String(url) !== RESET_CREDITS_URL) return response;
+    const payload = await response.json();
+    payload.credits.push({
+      id: "replacement",
+      status: "available",
+      reset_type: "codex_rate_limits",
+      expires_at: NOW + 21 * MINUTE,
+    });
+    return new Response(JSON.stringify(payload), { status: 200 });
+  });
+  await start();
+  await vi.advanceTimersByTimeAsync(4 * MINUTE);
+  let resolve!: (value: Awaited<ReturnType<typeof getCodexCredentials>>) => void;
+  vi.mocked(getCodexCredentials).mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  target.accountChanged(ctx);
+  const refresh = target.refresh(ctx);
+  expiredElsewhere = true;
+  await vi.advanceTimersByTimeAsync(7 * MINUTE);
+  expect(posts()).toHaveLength(0);
+  resolve({ accountId: account, accessToken: "mock-token", source: "authFile" });
+  await refresh;
+  await vi.advanceTimersByTimeAsync(MINUTE);
+  expect(posts()).toHaveLength(0);
+});
+
+test("same-account re-selection preserves the cooldown after a no-op preflight", async () => {
+  account = "account-b";
+  await start();
+  expiredElsewhere = true;
+  await vi.advanceTimersByTimeAsync(10 * MINUTE);
+  expect(posts()).toHaveLength(0);
+  expiredElsewhere = false;
+  target.accountChanged(ctx);
+  await target.refresh(ctx);
+  await vi.advanceTimersByTimeAsync(9 * MINUTE);
+  expect(posts()).toHaveLength(0);
+});
+
+test("unresolved notification identity cancels the retained credit", async () => {
+  account = "account-b";
+  await start();
+  await vi.advanceTimersByTimeAsync(4 * MINUTE);
+  vi.mocked(getCodexCredentials).mockRejectedValue(new Error("Mock resolution failed"));
+  target.accountChanged(ctx);
+  await target.refresh(ctx);
+  await vi.advanceTimersByTimeAsync(16 * MINUTE);
+  expect(posts()).toHaveLength(0);
+  expect(target.snapshot).toBeUndefined();
 });
 
 test("within one account a polling refresh retains the exact scheduled credit", async () => {

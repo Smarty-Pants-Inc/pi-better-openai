@@ -315,8 +315,8 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       setActiveMultiproviderService(value);
       unsubscribeMultiprovider = value.onActiveAccountChanged(CODEX_PROVIDER_ID, (event) => {
         void usageController.refresh(event.ctx, undefined, { force: true });
-        // Cancel the previous account's timer and any in-flight credit lookup.
-        resetController.start(event.ctx);
+        // Resolve identity before discarding the exact credit or account cooldown.
+        resetController.accountChanged(event.ctx);
         updateFooter(event.ctx);
       });
       const ctx = multiproviderRefreshCtx;

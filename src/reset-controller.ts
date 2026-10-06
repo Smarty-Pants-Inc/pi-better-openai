@@ -32,6 +32,8 @@ export class ResetController {
   private inFlight: Promise<void> | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private autoTimer: ReturnType<typeof setTimeout> | undefined;
+  private scheduledCredit: BankedResetCredit | undefined;
+  private identityPending = false;
   private sessionSignal: AbortSignal | undefined;
   private sessionAbortHandler: (() => void) | undefined;
   private lifetime = new AbortController();
@@ -88,16 +90,19 @@ export class ResetController {
       try {
         const credentials = await getCodexCredentials(ctx, signal);
         if (signal.aborted || generation !== this.generation) return;
-        if (credentials?.accountId !== this.cacheAccountId) {
+        const accountId = credentials?.accountId?.trim() ? credentials.accountId : undefined;
+        this.identityPending = false;
+        if (!accountId || accountId !== this.cacheAccountId) {
           // Exact-credit retention is only valid within the same account.
           this.clearAutoTimer();
           this.cache = undefined;
           this.blockedUntilMs = 0;
-          this.cacheAccountId = credentials?.accountId;
+          this.cacheAccountId = accountId;
         }
-        const credits = credentials
-          ? await requestBankedResetCredits(ctx, signal, credentials)
-          : undefined;
+        const credits =
+          credentials && accountId
+            ? await requestBankedResetCredits(ctx, signal, credentials)
+            : undefined;
         if (signal.aborted || generation !== this.generation) return;
         if (credits) {
           this.cache = { credits, updatedAt: Date.now() };
@@ -107,6 +112,13 @@ export class ResetController {
         }
       } catch (error) {
         if (generation !== this.generation || signal.aborted) return;
+        if (this.identityPending) {
+          // Unresolved identity must never retain an account's spending authority.
+          this.identityPending = false;
+          this.clearAutoTimer();
+          this.cache = undefined;
+          this.cacheAccountId = undefined;
+        }
         this.error = sanitizeDiagnosticError(
           error instanceof Error ? error.message : String(error),
         );
@@ -156,9 +168,10 @@ export class ResetController {
     }
   }
 
-  private clearAutoTimer(): void {
+  private clearAutoTimer(preserveCredit = false): void {
     if (this.autoTimer) clearTimeout(this.autoTimer);
     this.autoTimer = undefined;
+    if (!preserveCredit) this.scheduledCredit = undefined;
   }
 
   private canAutoRedeem(ctx: ExtensionContext): boolean {
@@ -173,7 +186,7 @@ export class ResetController {
 
   private scheduleAutoRedeem(scheduled?: BankedResetCredit): void {
     const ctx = this.activeCtx;
-    if (!ctx || this.redeeming) return;
+    if (!ctx || this.redeeming || this.identityPending) return;
     try {
       if (!this.canAutoRedeem(ctx)) {
         this.clearAutoTimer();
@@ -184,12 +197,16 @@ export class ResetController {
       if (this.autoTimer) return;
       const accountId = this.cacheAccountId;
       if (!accountId) return;
-      const credit = scheduled ?? selectAutoRedeemCredit(this.cache?.credits.credits ?? []);
+      const credit =
+        scheduled ??
+        this.scheduledCredit ??
+        selectAutoRedeemCredit(this.cache?.credits.credits ?? []);
       if (!credit || credit.expiresAtMs === null) return;
       const dueAt = Math.max(
         credit.expiresAtMs - BANKED_RESET_AUTO_REDEEM_LEAD_MS,
         this.blockedUntilMs,
       );
+      this.scheduledCredit = credit;
       this.autoTimer = setTimeout(
         () => {
           this.autoTimer = undefined;
@@ -197,7 +214,10 @@ export class ResetController {
           // a polling refresh has changed the cached credit list.
           if (accountId !== this.cacheAccountId) return;
           if (Date.now() < dueAt) this.scheduleAutoRedeem(credit);
-          else void this.autoRedeem(ctx, credit, accountId);
+          else {
+            this.scheduledCredit = undefined;
+            void this.autoRedeem(ctx, credit, accountId);
+          }
         },
         Math.max(0, Math.min(dueAt - Date.now(), BANKED_RESET_CACHE_TTL_MS)),
       );
@@ -286,6 +306,23 @@ export class ResetController {
     }
   }
 
+  // Notifications are not identities: invalidate pending work immediately, but
+  // retain the exact credit and cooldown until credentials resolve a real change.
+  accountChanged(ctx: ExtensionContext): void {
+    if (!this.activeCtx || this.lifetime.signal.aborted) {
+      this.start(ctx);
+      return;
+    }
+    this.generation++;
+    this.lifetime.abort();
+    this.lifetime = new AbortController();
+    this.inFlight = undefined;
+    this.redeeming = false;
+    this.identityPending = true;
+    this.clearAutoTimer(true);
+    void this.refresh(ctx, { force: true });
+  }
+
   start(ctx: ExtensionContext): void {
     this.stop();
     this.lifetime = new AbortController();
@@ -315,6 +352,7 @@ export class ResetController {
     this.activeCtx = undefined;
     this.inFlight = undefined;
     this.redeeming = false;
+    this.identityPending = false;
     this.clearAutoTimer();
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
