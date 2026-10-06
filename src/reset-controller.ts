@@ -334,10 +334,9 @@ export class ResetController {
   // Notifications are not identities: invalidate pending work immediately, but
   // retain the exact credit and cooldown until credentials resolve a real change.
   accountChanged(ctx: ExtensionContext): void {
-    if (!this.activeCtx || this.lifetime.signal.aborted) {
-      this.start(ctx);
-      return;
-    }
+    // Notifications may arrive after an explicit stop or a session abort. Those
+    // lifecycle states are latched: only start() is allowed to re-arm work.
+    if (!this.activeCtx || this.lifetime.signal.aborted) return;
     this.bindContext(ctx);
     if (ctx.signal?.aborted) {
       this.stop();

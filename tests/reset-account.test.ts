@@ -395,6 +395,45 @@ test("the adopted notification context cancels its new account's due work", asyn
   expect(posts()).toHaveLength(0);
 });
 
+test.each(["stop", "abort"] as const)(
+  "late live-context notifications after %s stay cancelled until explicit start",
+  async (reason) => {
+    const session = new AbortController();
+    ctx = { ...ctx, signal: session.signal };
+    const sessionManager = { getSessionId: () => "same-session" };
+    ctx = { ...ctx, sessionManager } as unknown as ExtensionContext;
+    await start();
+    await vi.advanceTimersByTimeAsync(3 * MINUTE);
+    if (reason === "stop") target.stop();
+    else session.abort();
+    expect(vi.getTimerCount()).toBe(0);
+
+    account = "account-b";
+    const liveContext = {
+      ...ctx,
+      signal: new AbortController().signal,
+      ui: { notify: vi.fn() },
+    } as unknown as ExtensionContext;
+    const lookups = vi.mocked(getCodexCredentials).mock.calls.length;
+    target.accountChanged(liveContext);
+    await target.refresh(liveContext, { force: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(getCodexCredentials).toHaveBeenCalledTimes(lookups);
+    await vi.advanceTimersByTimeAsync(8 * MINUTE);
+    expect(posts()).toHaveLength(0);
+    expect(liveContext.ui.notify).not.toHaveBeenCalled();
+
+    // Only an explicit lifecycle start authorizes background work again.
+    target.start(liveContext);
+    await target.refresh(liveContext);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(2);
+    expect(posts()).toHaveLength(1);
+    expect(JSON.parse(posts()[0]![1]!.body as string).credit_id).toBe("credit-b");
+  },
+);
+
 test("within one account a polling refresh retains the exact scheduled credit", async () => {
   account = "account-b";
   await start();
