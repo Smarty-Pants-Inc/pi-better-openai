@@ -7,11 +7,13 @@ import {
   type WebsearchResponseLength,
 } from "./config.ts";
 import {
+  CODEX_AUTH_REQUIRED,
   type CodexCredentials,
   getCodexCredentials,
   type CodexCredentialsWithSource,
 } from "./codex-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
+import { registerOptionalTool, type OptionalTool } from "./optional-tool.ts";
 import { resolveProviderRoute } from "./provider-route.ts";
 
 export const OPENAI_WEBSEARCH_TOOL = "openai_websearch";
@@ -110,7 +112,7 @@ async function resolveSearchRoute(
     if (credentials) return { url: CODEX_SEARCH_URL, credentials };
     throw new WebSearchError(
       "authentication_required",
-      "Missing openai-codex OAuth credentials. Run /login openai-codex, or set websearch.provider.",
+      `${CODEX_AUTH_REQUIRED} Alternatively, set websearch.provider to use a gateway.`,
     );
   }
   let route: ReturnType<typeof resolveProviderRoute>;
@@ -358,7 +360,7 @@ async function requestWebSearch(
 export function registerOpenAIWebSearch(
   pi: ExtensionAPI,
   getConfig: (ctx: ExtensionContext) => ResolvedConfig,
-): { getDebug: (ctx: ExtensionContext) => Promise<WebSearchDebug> } {
+): OptionalTool & { getDebug: (ctx: ExtensionContext) => Promise<WebSearchDebug> } {
   let lastStatus: string | undefined;
   let lastError: string | undefined;
 
@@ -446,7 +448,7 @@ export function registerOpenAIWebSearch(
     },
   });
 
-  pi.registerTool({
+  const tool = registerOptionalTool(pi, {
     name: OPENAI_WEBSEARCH_TOOL,
     label: "OpenAI web search",
     description:
@@ -470,7 +472,7 @@ export function registerOpenAIWebSearch(
     },
   });
 
-  return { getDebug };
+  return { getDebug, ...tool };
 }
 
 export const _websearchTest = {

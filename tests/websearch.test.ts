@@ -340,6 +340,21 @@ describe("openai_websearch tool execution", () => {
     });
   });
 
+  test("explains separate OpenAI auth and the explicit gateway alternative", async () => {
+    const fetchMock = stubFetch(codexSearchResponse());
+    const harness = createWebsearchHarness({
+      registryCredentials: undefined,
+      providers: { openai: { baseUrl: "https://api.openai.com/v1", apiKey: "direct-token" } },
+    });
+
+    const error = await rejectedError(executeSearch(harness, { query: "q" }));
+    expect(error.message).toContain("Run /login openai-codex");
+    expect(error.message).toContain("/login openai uses separate ChatGPT subscription credentials");
+    expect(error.message).toContain("set websearch.provider");
+    expect(harness.ctx.modelRegistry.getApiKeyForProvider).not.toHaveBeenCalledWith("openai");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   test("routes through websearch.provider with its key and no codex OAuth", async () => {
     const fetchMock = stubFetch(codexSearchResponse());
     const harness = createWebsearchHarness({

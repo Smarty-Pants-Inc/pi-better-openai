@@ -80,6 +80,7 @@ import { ResetController } from "./src/reset-controller.ts";
 import { registerOpenAIImage, _imageTest } from "./src/image.ts";
 import { registerOpenAIWebSearch, _websearchTest } from "./src/websearch.ts";
 import { registerOpenAIDecisions } from "./src/decisions.ts";
+import type { OptionalTool } from "./src/optional-tool.ts";
 import {
   type CodexPetPackage,
   codexHome,
@@ -277,6 +278,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
 
   const fastController = new FastController(SERVICE_TIER);
   let cachedConfig: ResolvedConfig | undefined;
+  const optionalTools = new Map<"image" | "websearch" | "decisions", OptionalTool>();
   let footerTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
   let footerInstalled = false;
   let statusInstalled = false;
@@ -313,7 +315,8 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       setActiveMultiproviderService(value);
       unsubscribeMultiprovider = value.onActiveAccountChanged(CODEX_PROVIDER_ID, (event) => {
         void usageController.refresh(event.ctx, undefined, { force: true });
-        void resetController.refresh(event.ctx, { force: true }).catch(() => {});
+        // Resolve identity before discarding the exact credit or account cooldown.
+        resetController.accountChanged(event.ctx);
         updateFooter(event.ctx);
       });
       const ctx = multiproviderRefreshCtx;
@@ -324,8 +327,13 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     });
   }
 
+  function syncToolExposure(cfg: ResolvedConfig): void {
+    for (const [feature, tool] of optionalTools) tool.setEnabled(cfg[feature].enabled);
+  }
+
   function refresh(ctx: ExtensionContext): ResolvedConfig {
     cachedConfig = resolveConfig(ctx.cwd || process.cwd());
+    syncToolExposure(cachedConfig);
     return cachedConfig;
   }
 
@@ -1161,9 +1169,10 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     },
   });
 
-  registerOpenAIImage(pi, config);
-  registerOpenAIWebSearch(pi, config);
-  registerOpenAIDecisions(pi, config, refresh);
+  optionalTools.set("image", registerOpenAIImage(pi, config));
+  optionalTools.set("websearch", registerOpenAIWebSearch(pi, config));
+  optionalTools.set("decisions", registerOpenAIDecisions(pi, config, refresh));
+  if (cachedConfig) syncToolExposure(cachedConfig);
   registerOpenAIPets(pi, {
     wake: async (ctx, slug) => {
       const pets = await listCodexPets();

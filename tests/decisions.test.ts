@@ -283,6 +283,7 @@ describe("native typed decisions", () => {
       () => resolveConfig(dir),
     );
     const command = commands.get("openai-decisions")!;
+    expect(tools.get("openai_decide")!.exposure).toBe("hidden");
     await command.handler("models", ctx);
     expect(classify).not.toHaveBeenCalled();
     expect(ctx.ui.notify).toHaveBeenCalledWith(
@@ -291,17 +292,20 @@ describe("native typed decisions", () => {
     );
     await command.handler("use openai/gpt-6-luna", ctx);
     expect(readRawConfig(path).decisions).toMatchObject({ enabled: false });
+    expect(tools.get("openai_decide")!.exposure).toBe("hidden");
     await command.handler("use typesafe/jev-latest", ctx);
     expect(readRawConfig(path)).toMatchObject({
       unknown: true,
       decisions: { enabled: true, model: "typesafe/jev-latest", unknown: "keep" },
     });
     const tool = tools.get("openai_decide")!;
+    expect(tool.exposure).toBe("direct");
     expect(tool.outputSchema).toBeDefined();
     expect(
       (await tool.execute("decision", input, undefined, undefined, ctx)).structuredContent,
     ).toMatchObject({ status: "ok" });
     await command.handler("off", ctx);
+    expect(tools.get("openai_decide")!.exposure).toBe("hidden");
     expect((await tool.execute("decision", input, undefined, undefined, ctx)).isError).toBe(true);
     expect(classify).toHaveBeenCalledOnce();
   });
