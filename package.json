@@ -55,7 +55,7 @@
     "test:pi": "node scripts/test-pi-compat.mjs"
   },
   "dependencies": {
-    "sharp": "0.35.4"
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "1.0.0",
