@@ -41,7 +41,8 @@ export class ResetController {
   private activeCtx: ExtensionContext | undefined;
   private redeeming = false;
   private manualPickers = 0;
-  private blockedUntilMs = 0;
+  // A no-op has no disk reservation, so suppression must survive account round trips.
+  private readonly blockedUntilByAccount = new Map<string, number>();
 
   private readonly autoRedeemEnabled: (ctx: ExtensionContext) => boolean;
   private readonly onAutoRedeemed: (ctx: ExtensionContext) => void;
@@ -96,7 +97,6 @@ export class ResetController {
           // Exact-credit retention is only valid within the same account.
           this.clearAutoTimer();
           this.cache = undefined;
-          this.blockedUntilMs = 0;
           this.cacheAccountId = accountId;
         }
         const credits =
@@ -149,12 +149,14 @@ export class ResetController {
     if (this.redeeming) throw new Error("A banked reset redemption is already in progress.");
     this.redeeming = true;
     const generation = this.generation;
-    this.blockedUntilMs = Date.now() + BANKED_RESET_AUTO_REDEEM_LEAD_MS;
+    const blockedUntilMs = Date.now() + BANKED_RESET_AUTO_REDEEM_LEAD_MS;
+    this.blockAccountUntil(this.cacheAccountId, blockedUntilMs);
     try {
       const signal = this.requestSignal(ctx);
       const credentials = await getCodexCredentials(ctx, signal);
       signal.throwIfAborted();
       if (!credentials) throw new Error(CODEX_AUTH_REQUIRED);
+      this.blockAccountUntil(credentials.accountId, blockedUntilMs);
       if (!reserveBankedResetRedemption(credentials.accountId, creditId))
         throw new Error(
           "A banked reset was already attempted recently; no additional credit was spent.",
@@ -172,6 +174,18 @@ export class ResetController {
     if (this.autoTimer) clearTimeout(this.autoTimer);
     this.autoTimer = undefined;
     if (!preserveCredit) this.scheduledCredit = undefined;
+  }
+
+  private get currentBlockedUntilMs(): number {
+    return this.cacheAccountId ? (this.blockedUntilByAccount.get(this.cacheAccountId) ?? 0) : 0;
+  }
+
+  private blockAccountUntil(accountId: string | undefined, untilMs: number): void {
+    if (accountId)
+      this.blockedUntilByAccount.set(
+        accountId,
+        Math.max(this.blockedUntilByAccount.get(accountId) ?? 0, untilMs),
+      );
   }
 
   private canAutoRedeem(ctx: ExtensionContext): boolean {
@@ -204,7 +218,7 @@ export class ResetController {
       if (!credit || credit.expiresAtMs === null) return;
       const dueAt = Math.max(
         credit.expiresAtMs - BANKED_RESET_AUTO_REDEEM_LEAD_MS,
-        this.blockedUntilMs,
+        this.currentBlockedUntilMs,
       );
       this.scheduledCredit = credit;
       this.autoTimer = setTimeout(
@@ -236,12 +250,13 @@ export class ResetController {
     const generation = this.generation;
     let ownsRedemption = false;
     try {
-      if (this.redeeming || !this.canAutoRedeem(ctx) || Date.now() < this.blockedUntilMs) return;
+      if (this.redeeming || !this.canAutoRedeem(ctx) || Date.now() < this.currentBlockedUntilMs)
+        return;
       this.redeeming = true;
       ownsRedemption = true;
       // Even a no-op or ambiguous failure ends this window: never try the next
       // credit. The persistent reservation below enforces this across processes.
-      this.blockedUntilMs = Date.now() + BANKED_RESET_AUTO_REDEEM_LEAD_MS;
+      this.blockAccountUntil(accountId, Date.now() + BANKED_RESET_AUTO_REDEEM_LEAD_MS);
       const signal = this.requestSignal(ctx);
       const credentials = await getCodexCredentials(ctx, signal);
       if (!credentials || credentials.accountId !== accountId) return;
@@ -306,11 +321,26 @@ export class ResetController {
     }
   }
 
+  private bindContext(ctx: ExtensionContext): void {
+    if (this.activeCtx === ctx && this.sessionSignal === ctx.signal) return;
+    if (this.sessionSignal && this.sessionAbortHandler)
+      this.sessionSignal.removeEventListener("abort", this.sessionAbortHandler);
+    this.activeCtx = ctx;
+    this.sessionSignal = ctx.signal;
+    this.sessionAbortHandler = () => this.stop();
+    ctx.signal?.addEventListener("abort", this.sessionAbortHandler, { once: true });
+  }
+
   // Notifications are not identities: invalidate pending work immediately, but
   // retain the exact credit and cooldown until credentials resolve a real change.
   accountChanged(ctx: ExtensionContext): void {
     if (!this.activeCtx || this.lifetime.signal.aborted) {
       this.start(ctx);
+      return;
+    }
+    this.bindContext(ctx);
+    if (ctx.signal?.aborted) {
+      this.stop();
       return;
     }
     this.generation++;
@@ -328,20 +358,18 @@ export class ResetController {
     this.lifetime = new AbortController();
     this.cache = undefined;
     this.cacheAccountId = undefined;
-    this.blockedUntilMs = 0;
+    this.blockedUntilByAccount.clear();
     this.lastFetchAt = undefined;
     if (ctx.signal?.aborted) return;
-    this.activeCtx = ctx;
-    this.sessionSignal = ctx.signal;
-    this.sessionAbortHandler = () => this.stop();
-    ctx.signal?.addEventListener("abort", this.sessionAbortHandler, { once: true });
+    this.bindContext(ctx);
     void this.refresh(ctx).catch(() => {});
     this.timer = setInterval(() => {
-      if (ctx.signal?.aborted) {
+      const activeCtx = this.activeCtx;
+      if (!activeCtx || activeCtx.signal?.aborted) {
         this.stop();
         return;
       }
-      void this.refresh(ctx).catch(() => {});
+      void this.refresh(activeCtx).catch(() => {});
     }, BANKED_RESET_CACHE_TTL_MS);
     this.timer.unref?.();
   }

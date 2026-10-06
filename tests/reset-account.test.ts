@@ -258,6 +258,143 @@ test("unresolved notification identity cancels the retained credit", async () =>
   expect(target.snapshot).toBeUndefined();
 });
 
+test("A to B to A retains A's no-op cooldown rather than spending its replacement", async () => {
+  let originalRedeemed = false;
+  const implementation = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url, init) => {
+    if (String(url) !== RESET_CREDITS_URL) return implementation(url, init);
+    const id = new Headers(init?.headers).get("chatgpt-account-id");
+    return new Response(
+      JSON.stringify({
+        available_count: 1,
+        applicable_available_count: 1,
+        credits:
+          id === "account-a"
+            ? [
+                {
+                  id: "credit-a",
+                  status: originalRedeemed ? "redeemed" : "available",
+                  reset_type: "codex_rate_limits",
+                  expires_at: NOW + 20 * MINUTE,
+                },
+                {
+                  id: "replacement-a",
+                  status: "available",
+                  reset_type: "codex_rate_limits",
+                  expires_at: NOW + 22 * MINUTE,
+                },
+              ]
+            : [
+                {
+                  id: "credit-b",
+                  status: "available",
+                  reset_type: "codex_rate_limits",
+                  expires_at: NOW + 100 * MINUTE,
+                },
+              ],
+      }),
+      { status: 200 },
+    );
+  });
+  await start();
+  originalRedeemed = true;
+  await vi.advanceTimersByTimeAsync(10 * MINUTE);
+  expect(posts()).toHaveLength(0);
+  account = "account-b";
+  target.accountChanged(ctx);
+  await target.refresh(ctx);
+  await vi.advanceTimersByTimeAsync(MINUTE);
+  account = "account-a";
+  target.accountChanged(ctx);
+  await target.refresh(ctx);
+  await vi.advanceTimersByTimeAsync(8 * MINUTE);
+  expect(posts()).toHaveLength(0);
+  // Suppression belongs to A and lasts exactly ten minutes after its no-op.
+  await vi.advanceTimersByTimeAsync(MINUTE);
+  expect(posts()).toHaveLength(1);
+  expect(JSON.parse(posts()[0]![1]!.body as string).credit_id).toBe("replacement-a");
+  expect(posts()[0]![1]!.headers).toMatchObject({ "chatgpt-account-id": "account-a" });
+});
+
+test("a fresh notification context supplies B credentials to polling and its due preflight", async () => {
+  const oldContext = ctx;
+  const newContext = { ...ctx, ui: { notify: vi.fn() } } as unknown as ExtensionContext;
+  vi.mocked(getCodexCredentials).mockImplementation(async (lookupContext) => ({
+    accessToken: lookupContext === oldContext ? "synthetic-a" : "synthetic-b",
+    accountId: lookupContext === oldContext ? "account-a" : "account-b",
+    source: "multiprovider",
+  }));
+  await start();
+  await vi.advanceTimersByTimeAsync(3 * MINUTE);
+  target.accountChanged(newContext);
+  await target.refresh(newContext);
+  await vi.advanceTimersByTimeAsync(7 * MINUTE - 1);
+  expect(posts()).toHaveLength(0);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(posts()).toHaveLength(1);
+  expect(JSON.parse(posts()[0]![1]!.body as string).credit_id).toBe("credit-b");
+  expect(posts()[0]![1]!.headers).toMatchObject({
+    "chatgpt-account-id": "account-b",
+    authorization: "Bearer synthetic-b",
+  });
+  expect(oldContext.ui.notify).not.toHaveBeenCalled();
+  expect(newContext.ui.notify).toHaveBeenCalledWith(
+    expect.stringContaining("Auto-redeem:"),
+    "info",
+  );
+});
+
+test("fresh same-account context rebinds cancellation without replacing the exact credit", async () => {
+  account = "account-b";
+  const oldSession = new AbortController();
+  const newSession = new AbortController();
+  ctx = { ...ctx, signal: oldSession.signal };
+  const implementation = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url, init) => {
+    const response = await implementation(url, init);
+    if (String(url) !== RESET_CREDITS_URL) return response;
+    const payload = await response.json();
+    payload.credits.push({
+      id: "replacement",
+      status: "available",
+      reset_type: "codex_rate_limits",
+      expires_at: NOW + 21 * MINUTE,
+    });
+    return new Response(JSON.stringify(payload), { status: 200 });
+  });
+  await start();
+  await vi.advanceTimersByTimeAsync(3 * MINUTE);
+  expiredElsewhere = true;
+  const newContext = {
+    ...ctx,
+    signal: newSession.signal,
+    ui: { notify: vi.fn() },
+  } as unknown as ExtensionContext;
+  target.accountChanged(newContext);
+  await target.refresh(newContext);
+  oldSession.abort();
+  await vi.advanceTimersByTimeAsync(9 * MINUTE);
+  expect(posts()).toHaveLength(0);
+  expect(target.snapshot).toBeDefined();
+  expect(vi.getTimerCount()).toBeGreaterThan(0);
+  newSession.abort();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("the adopted notification context cancels its new account's due work", async () => {
+  await start();
+  await vi.advanceTimersByTimeAsync(3 * MINUTE);
+  account = "account-b";
+  const session = new AbortController();
+  const newContext = { ...ctx, signal: session.signal };
+  target.accountChanged(newContext);
+  await target.refresh(newContext);
+  session.abort();
+  expect(vi.getTimerCount()).toBe(0);
+  await vi.advanceTimersByTimeAsync(8 * MINUTE);
+  expect(posts()).toHaveLength(0);
+});
+
 test("within one account a polling refresh retains the exact scheduled credit", async () => {
   account = "account-b";
   await start();
