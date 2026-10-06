@@ -26,7 +26,14 @@ test("loads through pi's real extension loader and registers the native Codex pr
     const loaded = loader.getExtensions();
     expect(loaded.errors).toEqual([]);
     expect(loaded.extensions).toHaveLength(1);
-    expect([...loaded.extensions[0]!.tools.keys()]).toEqual(["openai_image", "openai_websearch"]);
+    expect([...loaded.extensions[0]!.tools.keys()]).toEqual([
+      "openai_image",
+      "openai_websearch",
+      "openai_decide",
+    ]);
+    expect([...loaded.extensions[0]!.commands.keys()]).toEqual(
+      expect.arrayContaining(["fast", "openai-tier", "openai-decisions"]),
+    );
     expect(
       loaded.runtime.pendingNativeProviderRegistrations.map(({ provider }) => provider.id),
     ).toContain("openai-codex");
