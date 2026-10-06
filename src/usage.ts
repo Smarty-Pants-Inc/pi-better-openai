@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { AccountIdRequiredError, requireCodexCredentials } from "./codex-auth.ts";
+import { CodexIdentityRefusedError, requireCodexCredentials } from "./codex-auth.ts";
 export { AUTH_FILE, readCodexAuth } from "./codex-auth.ts";
 
 export type UsageWindow = {
@@ -144,7 +144,7 @@ export async function requestCodexUsage(
   try {
     credentials = await requireCodexCredentials(ctx, "/openai-usage", "", requestSignal);
   } catch (error) {
-    if (error instanceof AccountIdRequiredError) throw error;
+    if (error instanceof CodexIdentityRefusedError) throw error;
     if (requestSignal?.aborted) throw error;
     return undefined;
   }

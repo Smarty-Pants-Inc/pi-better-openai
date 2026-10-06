@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { chatgptJwt, piAuthFileRegistry } from "./helpers.ts";
 import {
   buildBankedResetConfirmation,
   formatConsumeOutcome,
@@ -32,7 +33,7 @@ function writeCodexAuth(agentDir: string): void {
       {
         "openai-codex": {
           type: "oauth",
-          access: "resets-access",
+          access: chatgptJwt("acct_resets"),
           accountId: "acct_resets",
         },
       },
@@ -197,7 +198,7 @@ async function createResetsHarness(config: Record<string, unknown> = {}): Promis
     },
     modelRegistry: {
       isUsingOAuth: vi.fn(() => true),
-      getApiKeyForProvider: vi.fn(() => Promise.resolve(undefined)),
+      getApiKeyForProvider: vi.fn(piAuthFileRegistry(agentDir)),
     },
     getContextUsage: vi.fn(() => ({ contextWindow: 0, percent: 0 })),
   } as unknown as ExtensionContext;
@@ -406,7 +407,7 @@ describe("banked reset network plumbing", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(resets.RESET_CREDITS_URL);
     expect(init.headers).toMatchObject({
-      authorization: "Bearer resets-access",
+      authorization: `Bearer ${chatgptJwt("acct_resets")}`,
       "chatgpt-account-id": "acct_resets",
     });
   });
@@ -659,7 +660,7 @@ describe("automatic reset extension wiring", () => {
 describe("ResetController caching", () => {
   function controllerCtx(): ExtensionContext {
     return {
-      modelRegistry: { getApiKeyForProvider: () => Promise.resolve(undefined) },
+      modelRegistry: { getApiKeyForProvider: piAuthFileRegistry(process.env.PI_CODING_AGENT_DIR!) },
     } as unknown as ExtensionContext;
   }
 

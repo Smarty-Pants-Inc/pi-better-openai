@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { chatgptJwt, piAuthFileRegistry } from "./helpers.ts";
 import { _test } from "../index.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "../src/format.ts";
 import { MULTIPROVIDER_SERVICE_EVENT, type MultiproviderService } from "../src/multiprovider.ts";
@@ -36,7 +37,7 @@ function writeCodexAuth(agentDir: string, expires?: number): void {
       {
         "openai-codex": {
           type: "oauth",
-          access: "usage-access",
+          access: chatgptJwt("acct_usage"),
           accountId: "acct_usage",
           ...(expires === undefined ? {} : { expires }),
         },
@@ -162,7 +163,7 @@ async function createUsageHarness(options: {
     },
     modelRegistry: {
       isUsingOAuth: vi.fn(() => options.isUsingOAuth ?? true),
-      getApiKeyForProvider: vi.fn(() => Promise.resolve(undefined)),
+      getApiKeyForProvider: vi.fn(piAuthFileRegistry(agentDir)),
     },
     getContextUsage: vi.fn(() => ({ contextWindow: 0, percent: 0 })),
   } as unknown as ExtensionContext;
@@ -424,13 +425,14 @@ describe("requestCodexUsage", () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(usage.USAGE_URL);
     expect(init.headers).toMatchObject({
-      authorization: "Bearer usage-access",
+      authorization: `Bearer ${chatgptJwt("acct_usage")}`,
       "chatgpt-account-id": "acct_usage",
     });
   });
 
-  test("uses refreshed model-registry credentials before auth-file fallback", async () => {
+  test("uses only the registry's default openai-codex credential, never the auth file", async () => {
     const agentDir = createTempDir("pi-better-openai-usage-agent-");
+    writeCodexAuth(agentDir);
     const fetchMock = stubUsageFetch(usageJsonResponse());
     const usage = await importUsageWithAgentDir(agentDir);
     const ctx = {
@@ -447,7 +449,9 @@ describe("requestCodexUsage", () => {
 
     expect(response).toEqual(usageResponseBody());
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(ctx.modelRegistry.getApiKeyForProvider).toHaveBeenCalledWith("openai");
+    expect(vi.mocked(ctx.modelRegistry.getApiKeyForProvider).mock.calls).toEqual([
+      ["openai-codex"],
+    ]);
     expect(init.headers).toMatchObject({
       authorization: "Bearer registry-access",
       "chatgpt-account-id": "acct_registry",
@@ -755,10 +759,13 @@ function fakeMultiproviderService() {
   type ChangedEvent = { providerId: string; account: unknown; ctx: ExtensionContext };
   type Auth = { accessToken: string; label: string; source?: string } | undefined;
   const listeners = new Map<(event: ChangedEvent) => void, string>();
+  type Active = { id: string; label: string; authKind: string };
   let resolveAuth: (providerId: string) => Promise<Auth> = async () => undefined;
+  let pins: Record<string, Active> = {};
   const resolveActiveAccountAuth = vi.fn(async (providerId: string) => resolveAuth(providerId));
   const value = {
-    getActiveAccount: vi.fn(async () => undefined),
+    // Faithful to pi-multiprovider 0.10.2: selection is reported separately from auth.
+    getActiveAccount: vi.fn(async (providerId: string) => pins[providerId]),
     resolveActiveAccountAuth,
     onActiveAccountChanged: vi.fn((providerId: string, listener: (event: ChangedEvent) => void) => {
       listeners.set(listener, providerId);
@@ -770,6 +777,9 @@ function fakeMultiproviderService() {
     resolveActiveAccountAuth,
     resolve(next: (providerId: string) => Promise<Auth>) {
       resolveAuth = next;
+    },
+    pin(next: Record<string, Active>) {
+      pins = next;
     },
     notifyAccountChanged(event: ChangedEvent) {
       for (const [listener, providerId] of listeners) {
@@ -840,6 +850,11 @@ describe("multiprovider resume", () => {
       await vi.waitFor(() => expect(widgetLine(harness)).toContain("5h: 90%"));
 
       // The replay then restores the account and tells followers about it.
+      const other = providerId === "openai" ? "openai-codex" : "openai";
+      service.pin({
+        [providerId]: { id: "acct_pinned", label: "Work", authKind: "oauth" },
+        [other]: { id: "acct_other_pool", label: "Other pool", authKind: "oauth" },
+      });
       service.resolve(async (poolProviderId) => ({
         accessToken: codexJwt(poolProviderId === providerId ? "acct_pinned" : "acct_other_pool"),
         label: poolProviderId === providerId ? "Work" : "Other pool",
@@ -918,6 +933,10 @@ describe("multiprovider resume", () => {
     await emit(harness, "session_start");
     await settleAsyncWork();
 
+    service.pin({
+      openai: { id: "acct_work", label: "Work", authKind: "oauth" },
+      "openai-codex": { id: "acct_pool_b", label: "Personal", authKind: "oauth" },
+    });
     service.resolve(async (poolProviderId) => ({
       accessToken: poolProviderId === "openai" ? accountless : codexJwt("acct_pool_b"),
       label: poolProviderId === "openai" ? "Work" : "Personal",

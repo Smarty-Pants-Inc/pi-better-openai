@@ -65,7 +65,13 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
-type Pools = Record<string, string | undefined>;
+/**
+ * pi-multiprovider pins per pool, faithful to its 0.10.2 announcement: a key present here is a
+ * selected account (`getActiveAccount()` reports it); its value is what
+ * `resolveActiveAccountAuth()` yields: a token, `undefined` (a pinned Pi-default slot or a
+ * swallowed refresh failure), or an Error (thrown). Absent keys are unselected pools.
+ */
+type Pools = Record<string, string | undefined | Error>;
 
 async function createHarness(auth: Record<string, unknown>, pools?: Pools, provider = "openai") {
   const cwd = tempDir("pbo-pi1-project-");
@@ -143,11 +149,16 @@ async function createHarness(auth: Record<string, unknown>, pools?: Pools, provi
   if (pools) {
     // pi-multiprovider's session-pinned account per pool (same module instance as index.ts).
     const { setActiveMultiproviderService } = await import("../src/multiprovider.ts");
+    const label = (pool: string) => `Synthetic ${pool}`;
     setActiveMultiproviderService({
-      getActiveAccount: vi.fn(async () => undefined),
-      resolveActiveAccountAuth: vi.fn(async (pool: string) =>
-        pools[pool] ? { accessToken: pools[pool], label: `Synthetic ${pool}` } : undefined,
+      getActiveAccount: vi.fn(async (pool: string) =>
+        pool in pools ? { id: `acct_${pool}`, label: label(pool), authKind: "oauth" } : undefined,
       ),
+      resolveActiveAccountAuth: vi.fn(async (pool: string) => {
+        const value = pools[pool];
+        if (value instanceof Error) throw value;
+        return value ? { accessToken: value, label: label(pool) } : undefined;
+      }),
       onActiveAccountChanged: vi.fn(() => () => {}),
     });
   }
@@ -283,4 +294,96 @@ test("a selected openai-codex pool account reaches all three endpoints", async (
     expect(headers.get("chatgpt-account-id")).toBe("acct_pool_b");
     expect(headers.get("authorization")).toBe(`Bearer ${POOL_B_ACCESS}`);
   }
+}, 30_000);
+
+// Round 5 (S2/R3 scope cut): one identity. A pin resolves only that account or refuses; no pin
+// uses only Pi's default openai-codex credential or refuses. Every endpoint, resets included.
+async function runAll(run: (name: string, args?: string) => unknown) {
+  const results: unknown[] = [];
+  for (const [name, args] of [
+    ["openai-usage", ""],
+    ["openai-image", "a small red apple"],
+    ["openai-websearch", "current UTC date"],
+    ["openai-resets", ""],
+  ] as const)
+    results.push(await Promise.resolve(run(name, args)).catch((error: unknown) => error));
+  return results.map(String).join("\n");
+}
+
+const bearers = (fetchMock: ReturnType<typeof stubFetch>) =>
+  fetchMock.mock.calls
+    .map(([, init]) => new Headers(init?.headers).get("authorization"))
+    .filter(Boolean);
+
+test.each([
+  ["(a) resolves undefined (pinned Pi-default slot / swallowed refresh)", undefined],
+  ["(b) resolver throws", new Error("refresh failed")],
+])(
+  "a pinned account that %s refuses, with zero bearer requests",
+  async (_label, pinned) => {
+    for (const provider of ["openai", "openai-codex"]) {
+      const fetchMock = stubFetch({});
+      // Distinct usable identities exist everywhere else: Pi's openai-codex login and the
+      // other pool. None may be used in place of the pinned account.
+      const { ctx, run } = await createHarness(
+        { ...PI1_AUTH, ...CODEX_AUTH },
+        { [provider]: pinned },
+        provider,
+      );
+      const out = await runAll(run);
+      const notes = vi.mocked(ctx.ui.notify).mock.calls.map(([message]) => String(message));
+      const all = `${out}\n${notes.join("\n")}`;
+      expect(all).toContain(`/openai-usage could not resolve the selected ${provider} account`);
+      expect(all).toContain(`/openai-image could not resolve the selected ${provider} account`);
+      expect(all).toContain(`/openai-websearch could not resolve the selected ${provider} account`);
+      expect(bearers(fetchMock)).toEqual([]);
+    }
+  },
+  60_000,
+);
+
+test("(a) a pin in one pool is not replaced by an unpinned pool or Pi's default login", async () => {
+  const fetchMock = stubFetch({});
+  const { run } = await createHarness({ ...PI1_AUTH, ...CODEX_AUTH }, { openai: undefined }, "x");
+  await runAll(run);
+  expect(bearers(fetchMock)).toEqual([]);
+}, 30_000);
+
+test("(c) a valid pin works and only its bearer is used", async () => {
+  const fetchMock = stubFetch({
+    rate_limit: { allowed: true, primary_window: { used_percent: 10, reset_after_seconds: 60 } },
+  });
+  const { run } = await createHarness({ ...PI1_AUTH, ...CODEX_AUTH }, { openai: POOL_B_ACCESS });
+  await runAll(run);
+  expect(chatgptCalls(fetchMock).map(([url]) => String(url))).toEqual(
+    expect.arrayContaining([
+      "https://chatgpt.com/backend-api/wham/usage",
+      "https://chatgpt.com/backend-api/codex/alpha/search",
+    ]),
+  );
+  expect(new Set(bearers(fetchMock))).toEqual(new Set([`Bearer ${POOL_B_ACCESS}`]));
+}, 30_000);
+
+test("(d) no pin: only Pi's default openai-codex credential is used", async () => {
+  const fetchMock = stubFetch({
+    rate_limit: { allowed: true, primary_window: { used_percent: 10, reset_after_seconds: 60 } },
+  });
+  // pi-multiprovider is active but nothing is selected.
+  const { run } = await createHarness({ ...PI1_AUTH, ...CODEX_AUTH }, {});
+  await runAll(run);
+  expect(chatgptCalls(fetchMock).map(([url]) => String(url))).toEqual(
+    expect.arrayContaining(["https://chatgpt.com/backend-api/wham/usage"]),
+  );
+  expect(new Set(bearers(fetchMock))).toEqual(new Set([`Bearer ${CODEX_ACCESS}`]));
+}, 30_000);
+
+test("(e) no pin and no default openai-codex credential: refuse", async () => {
+  const fetchMock = stubFetch({});
+  const { ctx, run } = await createHarness(PI1_AUTH, {});
+  const out = await runAll(run);
+  const notes = vi.mocked(ctx.ui.notify).mock.calls.map(([message]) => String(message));
+  expect(`${out}\n${notes.join("\n")}`).toContain(
+    "/openai-image needs a ChatGPT account id; Pi 1.0's ChatGPT login (/login openai) does not provide one.",
+  );
+  expect(bearers(fetchMock)).toEqual([]);
 }, 30_000);

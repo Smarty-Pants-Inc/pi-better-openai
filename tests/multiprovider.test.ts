@@ -19,9 +19,15 @@ function codexJwt(accountId: string): string {
 
 function fakeService(
   resolve: () => Promise<MultiproviderAccountAuth | undefined>,
+  pins: Record<string, string> = {},
 ): MultiproviderService {
   return {
-    getActiveAccount: vi.fn(async () => undefined),
+    // Faithful to pi-multiprovider 0.10.2: selection is reported separately from auth.
+    getActiveAccount: vi.fn(async (providerId: string) =>
+      pins[providerId]
+        ? { id: `acct_${providerId}`, label: pins[providerId], authKind: "oauth" }
+        : undefined,
+    ),
     resolveActiveAccountAuth: vi.fn(resolve),
     onActiveAccountChanged: vi.fn(() => () => {}),
   };
@@ -64,12 +70,17 @@ test("tracks the active service", () => {
   expect(getActiveMultiproviderService()).toBeUndefined();
 });
 
-test("prefers the multiprovider pinned account over registry credentials", async () => {
-  const service = fakeService(async () => ({
-    accessToken: codexJwt("acct_pooled"),
-    label: "Work",
-    source: "Work · Codex OAuth",
-  }));
+// Security S2 / Astra R3 (PR #27): one identity. A pin resolves only that account; no pin
+// uses only Pi's default openai-codex credential.
+test("uses only the pinned account, never registry credentials", async () => {
+  const service = fakeService(
+    async () => ({
+      accessToken: codexJwt("acct_pooled"),
+      label: "Work",
+      source: "Work · Codex OAuth",
+    }),
+    { [CHATGPT_PROVIDER_ID]: "Work" },
+  );
   setActiveMultiproviderService(service);
   const ctx = credentialContext();
 
@@ -88,12 +99,12 @@ test("prefers the multiprovider pinned account over registry credentials", async
   expect(ctx?.modelRegistry?.getApiKeyForProvider).not.toHaveBeenCalled();
 });
 
-test("falls back to the legacy pinned account when no openai pool resolves", async () => {
-  const service = fakeService(async () => undefined);
+test("a pin in the openai-codex pool is the only identity", async () => {
+  const service = fakeService(async () => undefined, { [CODEX_PROVIDER_ID]: "Legacy" });
   vi.mocked(service.resolveActiveAccountAuth).mockImplementation(async (providerId) =>
     providerId === CODEX_PROVIDER_ID
       ? { accessToken: codexJwt("acct_legacy_pool"), label: "Legacy" }
-      : undefined,
+      : { accessToken: codexJwt("acct_unselected"), label: "Unselected" },
   );
   setActiveMultiproviderService(service);
   const ctx = credentialContext();
@@ -104,37 +115,45 @@ test("falls back to the legacy pinned account when no openai pool resolves", asy
   });
   expect(
     vi.mocked(service.resolveActiveAccountAuth).mock.calls.map(([provider]) => provider),
-  ).toEqual([CHATGPT_PROVIDER_ID, CODEX_PROVIDER_ID]);
+  ).toEqual([CODEX_PROVIDER_ID]);
   expect(ctx?.modelRegistry?.getApiKeyForProvider).not.toHaveBeenCalled();
 });
 
-test("falls back to registry credentials when no pooled account resolves", async () => {
-  setActiveMultiproviderService(fakeService(async () => undefined));
-  const credentials = await getCodexCredentials(credentialContext());
-  expect(credentials).toEqual({
+test("with no pin, uses only the default openai-codex registry credential", async () => {
+  const service = fakeService(async () => ({ accessToken: codexJwt("acct_x"), label: "X" }));
+  setActiveMultiproviderService(service);
+  const ctx = credentialContext();
+  expect(await getCodexCredentials(ctx)).toEqual({
     accessToken: "registry-access",
     accountId: "acct_registry",
     source: "modelRegistry",
   });
+  expect(service.resolveActiveAccountAuth).not.toHaveBeenCalled();
+  expect(vi.mocked(ctx!.modelRegistry!.getApiKeyForProvider).mock.calls).toEqual([
+    [CODEX_PROVIDER_ID],
+  ]);
 });
 
-test("falls back when the pooled token is not a subscription OAuth token", async () => {
+test.each([
+  ["a non-subscription token", async () => ({ accessToken: "plain-api-key", label: "Key" })],
+  ["a rejected resolution", () => Promise.reject(new Error("store locked"))],
+  ["an undefined resolution", async () => undefined],
+])("a pinned account with %s refuses instead of using the registry", async (_label, resolve) => {
   setActiveMultiproviderService(
-    fakeService(async () => ({ accessToken: "plain-api-key", label: "Key" })),
+    fakeService(resolve as () => Promise<MultiproviderAccountAuth | undefined>, {
+      [CHATGPT_PROVIDER_ID]: "Key",
+    }),
   );
-  const credentials = await getCodexCredentials(credentialContext());
-  expect(credentials?.source).toBe("modelRegistry");
-});
-
-test("falls back when the multiprovider resolver rejects", async () => {
-  setActiveMultiproviderService(fakeService(() => Promise.reject(new Error("store locked"))));
-  const credentials = await getCodexCredentials(credentialContext());
-  expect(credentials?.source).toBe("modelRegistry");
+  const ctx = credentialContext();
+  expect(await getCodexCredentials(ctx)).toBeUndefined();
+  expect(ctx?.modelRegistry?.getApiKeyForProvider).not.toHaveBeenCalled();
 });
 
 test("uses the registry path when pi-multiprovider is absent", async () => {
   const ctx = credentialContext();
   const credentials = await getCodexCredentials(ctx);
   expect(credentials?.source).toBe("modelRegistry");
-  expect(ctx?.modelRegistry?.getApiKeyForProvider).toHaveBeenCalledWith(CHATGPT_PROVIDER_ID);
+  expect(vi.mocked(ctx!.modelRegistry!.getApiKeyForProvider).mock.calls).toEqual([
+    [CODEX_PROVIDER_ID],
+  ]);
 });

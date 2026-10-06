@@ -20,13 +20,13 @@ pi install npm:@monotykamary/pi-better-openai
 
 ## Authentication
 
-Usage display, image generation, and web search require pi's ChatGPT OAuth credentials. The extension preserves credential-source priority: the pinned pooled account, refreshed model-registry auth, then unexpired auth-file entries. Within each source it tries `openai` first, falling back to legacy `openai-codex` credentials; API keys are not subscription credentials.
+Usage display, image generation, web search and resets use exactly one ChatGPT identity, with no fallback: the account selected in pi-multiprovider if any is selected, otherwise pi's own `openai-codex` (**OpenAI Codex (legacy)**) login. If that one identity is missing, cannot be resolved, or has no ChatGPT account id, the command refuses; another account is never used in its place. API keys are not subscription credentials.
 
 1. In pi, run `/login openai` and choose **Sign in with ChatGPT**. Pi 1.0's ChatGPT login (`openai`) is a direct `api.openai.com` token with no ChatGPT account id, and the usage, image and web search endpoints need one: with only that login, these commands say so. Run `/login openai-codex` (**OpenAI Codex (legacy)**) as well to use them; web search can also use `websearch.provider`.
 2. Verify subscription usage with `/openai-usage`, or open `/openai-settings` and check **Diagnostics**.
 3. The extension reads auth from pi's agent auth store, normally `~/.pi/agent/auth.json`. Do not copy, paste, or commit values from this file.
 4. If `PI_CODING_AGENT_DIR` is set, the auth store, global extension config, and global generated-image directory use that agent directory instead of `~/.pi/agent`. A leading `~/` is expanded to your home directory.
-5. When [pi-multiprovider](https://github.com/monotykamary/pi-multiprovider) 0.8.0+ pools ChatGPT accounts under `openai` or legacy `openai-codex`, the session's active account (chosen with `/switch-account`) is resolved first for usage display, image generation, and web search; the usage widget refreshes on every switch and whenever a resumed session restores the account, so it never keeps billing the account the session used before. Without that extension, credential resolution is unchanged.
+5. When [pi-multiprovider](https://github.com/monotykamary/pi-multiprovider) 0.8.0+ pools ChatGPT accounts under `openai` or legacy `openai-codex`, the session's active account (chosen with `/switch-account`) is the only account used for usage display, image generation, web search and resets. If it cannot be resolved (including a pinned Pi-default slot), these commands refuse; clear the pin to use pi's `openai-codex` login; the usage widget refreshes on every switch and whenever a resumed session restores the account, so it never keeps billing the account the session used before. With no account selected, pi's `openai-codex` login is used.
 
 ## Features
 

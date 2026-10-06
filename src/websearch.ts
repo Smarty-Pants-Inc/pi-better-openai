@@ -97,7 +97,7 @@ type SearchRoute = {
 /**
  * With websearch.provider set, search goes through that pi provider (for example a
  * CLIProxyAPI gateway) with its base URL and API key, resolved by resolveProviderRoute.
- * The gateway owns ChatGPT OAuth and account selection. Unset uses ChatGPT OAuth (openai first, then legacy openai-codex).
+ * The gateway owns ChatGPT OAuth and account selection. Unset uses the one ChatGPT identity from codex-auth (selected account, else openai-codex).
  */
 async function resolveSearchRoute(
   ctx: ExtensionContext,

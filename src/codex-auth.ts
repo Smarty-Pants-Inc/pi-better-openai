@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CHATGPT_PROVIDER_IDS, getActiveMultiproviderService } from "./multiprovider.ts";
+import {
+  CHATGPT_PROVIDER_ID,
+  CHATGPT_PROVIDER_IDS,
+  CODEX_PROVIDER_ID,
+  getActiveMultiproviderService,
+  type MultiproviderActiveAccount,
+} from "./multiprovider.ts";
 import { piAgentDir } from "./paths.ts";
 
 export const AUTH_FILE = join(piAgentDir(), "auth.json");
@@ -128,7 +134,15 @@ export function accountIdRequiredMessage(
   );
 }
 
-export class AccountIdRequiredError extends Error {
+/** A clear refusal: the one permitted identity cannot serve this endpoint. */
+export class CodexIdentityRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CodexIdentityRefusedError";
+  }
+}
+
+export class AccountIdRequiredError extends CodexIdentityRefusedError {
   constructor(command: string, alternative?: string, selectedPool?: string) {
     super(accountIdRequiredMessage(command, alternative, selectedPool));
     this.name = "AccountIdRequiredError";
@@ -181,16 +195,39 @@ export function readCodexAuth(): CodexCredentials | undefined {
   return resolveAuthFile().credentials;
 }
 
+/** Pi's own stored `openai-codex` login: the default identity when no model registry is available. */
+function readDefaultCodexAuthFile(): { token?: string; directToken: boolean } {
+  try {
+    const auth = JSON.parse(readFileSync(AUTH_FILE, "utf8")) as Record<
+      string,
+      { type?: string; access?: unknown; expires?: unknown } | undefined
+    >;
+    const usable = (entry: (typeof auth)[string]) =>
+      entry?.type === "oauth" &&
+      typeof entry.access === "string" &&
+      !(typeof entry.expires === "number" && Date.now() >= entry.expires);
+    const codex = auth[CODEX_PROVIDER_ID];
+    const openai = auth[CHATGPT_PROVIDER_ID];
+    return {
+      token: usable(codex) ? JSON.stringify(codex) : undefined,
+      directToken: usable(openai) && isDirectChatGptToken(openai?.access as string),
+    };
+  } catch {
+    return { directToken: false };
+  }
+}
+
 export async function getCodexCredentials(
   ctx?: CodexCredentialsContext,
   signal?: AbortSignal,
 ): Promise<CodexCredentialsWithSource | undefined> {
-  return (await resolveCodexCredentials(ctx, signal)).credentials;
+  const resolved = await resolveCodexIdentity(ctx, signal);
+  return resolved.kind === "refuse" ? undefined : resolved.credentials;
 }
 
 /**
- * Credentials for a chatgpt.com backend endpoint. Throws AccountIdRequiredError when the
- * only ChatGPT login is Pi 1.0's direct token, and `missingMessage` when there is none.
+ * Credentials for a chatgpt.com backend endpoint. Throws a clear refusal when the selected
+ * account cannot serve it, or when there is no selection and no default openai-codex login.
  */
 export async function requireCodexCredentials(
   ctx: CodexCredentialsContext | undefined,
@@ -199,89 +236,134 @@ export async function requireCodexCredentials(
   signal?: AbortSignal,
   alternative?: string,
 ): Promise<CodexCredentialsWithSource> {
-  const resolved = await resolveCodexCredentials(ctx, signal);
-  if (resolved.credentials) return resolved.credentials;
-  if (resolved.selectedPoolFailed)
-    throw new Error(
-      `${command} could not resolve the selected ${resolved.selectedPool} account, and another account is never used in its place. ` +
-        `Select or log in to an openai-codex account (/login openai-codex).`,
-    );
-  if (resolved.directTokenOnly)
-    throw new AccountIdRequiredError(command, alternative, resolved.selectedPool);
-  throw new Error(missingMessage);
+  const resolved = await resolveCodexIdentity(ctx, signal);
+  if (resolved.kind !== "refuse") return resolved.credentials;
+  switch (resolved.reason) {
+    case "selected-unresolved":
+      throw new CodexIdentityRefusedError(
+        `${command} could not resolve the selected ${resolved.selectedPool} account, and another account is never used in its place. ` +
+          `Select or log in to an openai-codex account (/login openai-codex).`,
+      );
+    case "selected-ambiguous":
+      throw new CodexIdentityRefusedError(
+        `${command} found selected accounts in more than one ChatGPT pool and cannot tell which one this session uses; ` +
+          `another account is never used in its place. Switch to a model from the pool you want.`,
+      );
+    case "selected-no-account-id":
+      throw new AccountIdRequiredError(command, alternative, resolved.selectedPool);
+    case "default-direct-only":
+      throw new AccountIdRequiredError(command, alternative);
+    default:
+      throw new Error(missingMessage);
+  }
 }
 
-type CodexResolution = {
-  credentials?: CodexCredentialsWithSource;
-  directTokenOnly: boolean;
-  /** Set when a selected pool account refused: no other account may replace it. */
-  selectedPool?: string;
-  selectedPoolFailed?: boolean;
-};
+export type CodexIdentity =
+  | { kind: "selected" | "default"; credentials: CodexCredentialsWithSource }
+  | {
+      kind: "refuse";
+      reason:
+        | "selected-unresolved"
+        | "selected-ambiguous"
+        | "selected-no-account-id"
+        | "default-direct-only"
+        | "default-missing";
+      selectedPool?: string;
+    };
 
-async function resolveCodexCredentials(
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw signal.reason ?? new Error("Operation was aborted.");
+}
+
+/**
+ * Security S2 / Astra R3 (PR #27). ponytail: one identity source, no fallback chain.
+ * - Any pi-multiprovider selection (`getActiveAccount()` returns an account in a ChatGPT pool)
+ *   resolves ONLY that account; `undefined`, a throw, or no account id refuses.
+ * - With no selection at all, ONLY Pi's default `openai-codex` credential is used; else refuse.
+ */
+export async function resolveCodexIdentity(
   ctx?: CodexCredentialsContext,
   signal?: AbortSignal,
-): Promise<CodexResolution> {
-  let directTokenOnly = false;
-  if (signal?.aborted) throw signal.reason ?? new Error("Operation was aborted.");
-  // A pooled account pinned for this session (pi-multiprovider /switch-account)
-  // wins over pi's own credential: subscription usage is per-account.
+): Promise<CodexIdentity> {
+  throwIfAborted(signal);
   const multiprovider = getActiveMultiproviderService();
-  if (multiprovider && ctx) {
-    // Security S2 (PR #27): the selected model's pool is authoritative. Its account is used
-    // or the command refuses; it never falls through to another pool or Pi credential.
-    const selectedPool = (CHATGPT_PROVIDER_IDS as readonly string[]).includes(
+  if (multiprovider) {
+    // Without a context the selection cannot be read, so "nothing selected" is unproven.
+    if (!ctx) return { kind: "refuse", reason: "selected-unresolved", selectedPool: "ChatGPT" };
+    const modelPool = (CHATGPT_PROVIDER_IDS as readonly string[]).includes(
       ctx.model?.provider ?? "",
     )
       ? ctx.model?.provider
       : undefined;
-    const poolProviderIds = selectedPool ? [selectedPool] : CHATGPT_PROVIDER_IDS;
-    for (const providerId of poolProviderIds) {
+    const pinned = new Map<string, MultiproviderActiveAccount>();
+    for (const providerId of CHATGPT_PROVIDER_IDS) {
+      try {
+        const active = await waitForSignal(multiprovider.getActiveAccount(providerId, ctx), signal);
+        if (active) pinned.set(providerId, active);
+      } catch {
+        throwIfAborted(signal);
+        return { kind: "refuse", reason: "selected-unresolved", selectedPool: providerId };
+      }
+    }
+    const selectedPool =
+      modelPool && pinned.has(modelPool)
+        ? modelPool
+        : pinned.size === 1
+          ? [...pinned.keys()][0]
+          : undefined;
+    if (pinned.size > 0 && !selectedPool) return { kind: "refuse", reason: "selected-ambiguous" };
+    if (selectedPool) {
       let resolved;
       try {
         resolved = await waitForSignal(
-          multiprovider.resolveActiveAccountAuth(providerId, ctx, signal),
+          multiprovider.resolveActiveAccountAuth(selectedPool, ctx, signal),
           signal,
         );
       } catch {
-        if (signal?.aborted) throw signal.reason ?? new Error("Operation was aborted.");
-        if (selectedPool) return { directTokenOnly: false, selectedPool, selectedPoolFailed: true };
-        continue; // Nothing selected: try the other pool, then pi-owned credentials.
+        throwIfAborted(signal);
+        resolved = undefined;
       }
-      if (!resolved) continue; // No account in this pool.
+      // A pin that changed between the two calls (switch/resume) is not the selected account.
+      if (!resolved || resolved.label !== pinned.get(selectedPool)?.label)
+        return { kind: "refuse", reason: "selected-unresolved", selectedPool };
       const accountId = extractAccountIdFromJwt(resolved.accessToken);
-      if (accountId)
-        return {
-          credentials: { accessToken: resolved.accessToken, accountId, source: "multiprovider" },
-          directTokenOnly: false,
-        };
-      // ponytail: a pool account with a ChatGPT identity but no account id is a real
-      // account; replacing it with another identity is the S2 leak, selected or not.
-      if (selectedPool || isDirectChatGptToken(resolved.accessToken))
-        return { directTokenOnly: true, selectedPool: providerId };
+      if (!accountId) return { kind: "refuse", reason: "selected-no-account-id", selectedPool };
+      return {
+        kind: "selected",
+        credentials: { accessToken: resolved.accessToken, accountId, source: "multiprovider" },
+      };
     }
   }
-  for (const providerId of CHATGPT_PROVIDER_IDS) {
-    if (signal?.aborted) throw signal.reason ?? new Error("Operation was aborted.");
-    const registryRequest = ctx?.modelRegistry?.getApiKeyForProvider(providerId);
-    const registryToken = registryRequest
-      ? await waitForSignal(
-          registryRequest.catch(() => undefined),
-          signal,
-        )
-      : undefined;
-    const registryCredentials = parseCodexRegistryCredentials(registryToken);
-    if (registryCredentials)
-      return {
-        credentials: { ...registryCredentials, source: "modelRegistry" },
-        directTokenOnly: false,
-      };
-    if (providerId === CHATGPT_PROVIDER_IDS[0] && isDirectChatGptToken(registryToken))
-      directTokenOnly = true;
+
+  // No selection: Pi's single default openai-codex credential.
+  const registry = ctx?.modelRegistry;
+  let token: string | undefined;
+  let directToken = false;
+  if (registry) {
+    token = await waitForSignal(
+      Promise.resolve(registry.getApiKeyForProvider(CODEX_PROVIDER_ID)).catch(() => undefined),
+      signal,
+    );
+  } else {
+    ({ token, directToken } = readDefaultCodexAuthFile());
   }
-  const auth = resolveAuthFile();
-  return auth.credentials
-    ? { credentials: { ...auth.credentials, source: "authFile" }, directTokenOnly: false }
-    : { directTokenOnly: directTokenOnly || auth.directTokenOnly };
+  throwIfAborted(signal);
+  const credentials = parseCodexRegistryCredentials(token);
+  if (credentials)
+    return {
+      kind: "default",
+      credentials: { ...credentials, source: registry ? "modelRegistry" : "authFile" },
+    };
+  if (registry && !token) {
+    // Message only: say why /login openai is not enough. This token is never sent anywhere.
+    const openai = await waitForSignal(
+      Promise.resolve(registry.getApiKeyForProvider(CHATGPT_PROVIDER_ID)).catch(() => undefined),
+      signal,
+    );
+    directToken = isDirectChatGptToken(openai);
+  }
+  return {
+    kind: "refuse",
+    reason: directToken || isDirectChatGptToken(token) ? "default-direct-only" : "default-missing",
+  };
 }
