@@ -7,12 +7,14 @@ import {
   type WebsearchResponseLength,
 } from "./config.ts";
 import {
+  CODEX_AUTH_REQUIRED,
   type CodexCredentials,
   requireCodexCredentials,
   type CodexCredentialsWithSource,
 } from "./codex-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
 import { resolveProviderRoute } from "./provider-route.ts";
+import { registerOptionalTool, type OptionalTool } from "./optional-tool.ts";
 
 export const OPENAI_WEBSEARCH_TOOL = "openai_websearch";
 export const OPENAI_WEBSEARCH_COMMAND = "openai-websearch";
@@ -110,7 +112,7 @@ async function resolveSearchRoute(
       const credentials = await requireCodexCredentials(
         ctx,
         "/openai-websearch",
-        "Missing ChatGPT OAuth credentials. Run /login openai and choose Sign in with ChatGPT, or set websearch.provider.",
+        `${CODEX_AUTH_REQUIRED} Or set websearch.provider.`,
         signal,
         "or set websearch.provider",
       );
@@ -352,7 +354,7 @@ async function requestWebSearch(
         "authentication_failed",
         route.provider
           ? `Web search authentication failed at provider "${route.provider}" (HTTP ${response.status}). Check its API key in pi.`
-          : `ChatGPT web search authentication failed (HTTP ${response.status}). Reconnect with /login openai and choose Sign in with ChatGPT.`,
+          : `ChatGPT web search authentication failed (HTTP ${response.status}). Reconnect the selected ChatGPT account, or run /login openai-codex (legacy) for the default account.`,
       );
     }
     throw new WebSearchError(
@@ -368,7 +370,7 @@ async function requestWebSearch(
 export function registerOpenAIWebSearch(
   pi: ExtensionAPI,
   getConfig: (ctx: ExtensionContext) => ResolvedConfig,
-): { getDebug: (ctx: ExtensionContext) => Promise<WebSearchDebug> } {
+): OptionalTool & { getDebug: (ctx: ExtensionContext) => Promise<WebSearchDebug> } {
   let lastStatus: string | undefined;
   let lastError: string | undefined;
 
@@ -456,7 +458,7 @@ export function registerOpenAIWebSearch(
     },
   });
 
-  pi.registerTool({
+  const tool = registerOptionalTool(pi, {
     name: OPENAI_WEBSEARCH_TOOL,
     label: "OpenAI web search",
     description:
@@ -480,7 +482,7 @@ export function registerOpenAIWebSearch(
     },
   });
 
-  return { getDebug };
+  return { getDebug, ...tool };
 }
 
 export const _websearchTest = {

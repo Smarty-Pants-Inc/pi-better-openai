@@ -715,7 +715,8 @@ describe("ResetController caching", () => {
     await controller.refresh(controllerCtx());
 
     expect(controller.snapshot).toBeUndefined();
-    expect(controller.lastError).toContain("credentials unavailable");
+    expect(controller.lastError).toContain("Missing openai-codex OAuth credentials");
+    expect(controller.lastError).toContain("/login openai uses separate");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

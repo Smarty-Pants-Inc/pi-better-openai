@@ -13,6 +13,7 @@ import {
   type DecisionsConfig,
   type ResolvedConfig,
 } from "./config.ts";
+import { registerOptionalTool, type OptionalTool } from "./optional-tool.ts";
 
 export const OPENAI_DECIDE_TOOL = "openai_decide";
 export const OPENAI_DECISIONS_COMMAND = "openai-decisions";
@@ -335,7 +336,7 @@ export function registerOpenAIDecisions(
   pi: ExtensionAPI,
   getConfig: (ctx: ExtensionContext) => ResolvedConfig,
   refreshConfig: (ctx: ExtensionContext) => ResolvedConfig,
-): void {
+): OptionalTool {
   function save(ctx: ExtensionContext, patch: DecisionsConfig): void {
     const cfg = refreshConfig(ctx);
     const raw = readRawConfig(cfg.configPath);
@@ -343,7 +344,7 @@ export function registerOpenAIDecisions(
       ...raw,
       decisions: { ...(isRecord(raw.decisions) ? raw.decisions : {}), ...patch },
     });
-    refreshConfig(ctx);
+    tool.setEnabled(refreshConfig(ctx).decisions.enabled);
   }
 
   pi.registerCommand(OPENAI_DECISIONS_COMMAND, {
@@ -388,7 +389,7 @@ export function registerOpenAIDecisions(
       }
     },
   });
-  pi.registerTool({
+  const tool = registerOptionalTool(pi, {
     name: OPENAI_DECIDE_TOOL,
     label: "Typed decision",
     description:
@@ -402,4 +403,5 @@ export function registerOpenAIDecisions(
     execute: (_id, params, signal, _onUpdate, ctx) =>
       evaluateDecision(ctx, getConfig(ctx), params, signal),
   });
+  return tool;
 }

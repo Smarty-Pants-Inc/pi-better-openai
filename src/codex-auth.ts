@@ -12,6 +12,9 @@ import { piAgentDir } from "./paths.ts";
 
 export const AUTH_FILE = join(piAgentDir(), "auth.json");
 
+export const CODEX_AUTH_REQUIRED =
+  "Missing openai-codex OAuth credentials. Run /login openai-codex for this Codex backend feature. /login openai uses separate ChatGPT subscription credentials for api.openai.com.";
+
 export type CodexCredentials = {
   accessToken: string;
   accountId: string;

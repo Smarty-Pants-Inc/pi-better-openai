@@ -7,12 +7,14 @@ import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
 import sharp from "sharp";
 import { isRecord, normalizeImageModel, type ResolvedConfig } from "./config.ts";
 import {
+  CODEX_AUTH_REQUIRED,
   extractAccountIdFromJwt,
   requireCodexCredentials,
   type CodexCredentialsWithSource,
 } from "./codex-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
 import { piAgentDir, resolveUserPath } from "./paths.ts";
+import { registerOptionalTool, type OptionalTool } from "./optional-tool.ts";
 
 const OPENAI_IMAGE_TOOL = "openai_image";
 const OPENAI_IMAGE_COMMAND = "openai-image";
@@ -126,12 +128,7 @@ async function getCredentials(
   ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<CodexImageCredentials> {
-  return requireCodexCredentials(
-    ctx,
-    "/openai-image",
-    "Missing ChatGPT OAuth credentials. Run /login openai and choose Sign in with ChatGPT.",
-    signal,
-  );
+  return requireCodexCredentials(ctx, "/openai-image", CODEX_AUTH_REQUIRED, signal);
 }
 
 function resolveModel(params: Pick<ToolParams, "model">, cfg: ResolvedConfig): string {
@@ -467,7 +464,7 @@ function resultText(result: CodexImageResult): string {
 export function registerOpenAIImage(
   pi: ExtensionAPI,
   getConfig: (ctx: ExtensionContext) => ResolvedConfig,
-): { getDebug: (ctx: ExtensionContext) => Promise<ImageGenerationDebug> } {
+): OptionalTool & { getDebug: (ctx: ExtensionContext) => Promise<ImageGenerationDebug> } {
   let lastStatus: string | undefined;
   let lastError: string | undefined;
 
@@ -584,7 +581,7 @@ export function registerOpenAIImage(
     },
   });
 
-  pi.registerTool({
+  const tool = registerOptionalTool(pi, {
     name: OPENAI_IMAGE_TOOL,
     label: "OpenAI image",
     description:
@@ -619,7 +616,7 @@ export function registerOpenAIImage(
     },
   });
 
-  return { getDebug };
+  return { getDebug, ...tool };
 }
 
 export const _imageTest = {

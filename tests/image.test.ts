@@ -589,7 +589,7 @@ describe("openai_image tool execution", () => {
     const harness = createImageHarness({ registryCredentials: undefined });
 
     await expect(executeImageTool(harness, { prompt: "draw" })).rejects.toThrow(
-      "Missing ChatGPT OAuth credentials. Run /login openai and choose Sign in with ChatGPT.",
+      "Missing openai-codex OAuth credentials. Run /login openai-codex",
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });

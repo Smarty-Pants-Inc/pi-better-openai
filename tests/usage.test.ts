@@ -458,6 +458,35 @@ describe("requestCodexUsage", () => {
     });
   });
 
+  test("never substitutes OpenAI direct OAuth for Codex backend auth", async () => {
+    const agentDir = createTempDir("pi-better-openai-usage-agent-");
+    const access = codexJwt("acct_openai_only");
+    writeFileSync(
+      join(agentDir, "auth.json"),
+      JSON.stringify({
+        openai: {
+          type: "oauth",
+          access,
+          accountId: "acct_openai_only",
+          expires: Date.now() + 3600000,
+        },
+      }),
+    );
+    const fetchMock = stubUsageFetch(usageJsonResponse);
+    const usage = await importUsageWithAgentDir(agentDir);
+    const getApiKeyForProvider = vi.fn(async (provider: string) =>
+      provider === "openai" ? access : undefined,
+    );
+    const ctx = {
+      model: { provider: "openai", id: "gpt-5.5" },
+      modelRegistry: { getApiKeyForProvider },
+    } as unknown as ExtensionContext;
+
+    await expect(usage.requestCodexUsage(ctx)).resolves.toBeUndefined();
+    expect(getApiKeyForProvider.mock.calls).toEqual([["openai-codex"], ["openai"]]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   test("returns undefined without fetch when isolated auth is missing", async () => {
     const agentDir = createTempDir("pi-better-openai-usage-agent-");
     const fetchMock = stubUsageFetch(usageJsonResponse());
@@ -547,41 +576,54 @@ describe("usage polling lifecycle", () => {
     ]);
   });
 
-  test("fetches usage for OAuth OpenAI models and updates status text", async () => {
-    const fetchMock = stubUsageFetch(usageJsonResponse);
-    const harness = await createUsageHarness({
-      usageConfig: {
-        enabled: true,
-        refreshIntervalMs: 60000,
-        showOnlyOnSubscriptionModels: true,
-        showResetTimes: false,
-      },
-      isUsingOAuth: true,
-    });
-
-    await emit(harness, "session_start");
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(harness.ctx.ui.setWidget).toHaveBeenCalled());
-
-    const widgetFactory = vi.mocked(harness.ctx.ui.setWidget).mock.calls.at(-1)?.[1];
-    expect(widgetFactory).toEqual(expect.any(Function));
-    if (typeof widgetFactory !== "function") throw new Error("Expected a status widget factory");
-    const colorCalls: Array<[string, string]> = [];
-    const widget = widgetFactory(
-      {} as never,
-      {
-        fg: (color: string, value: string) => {
-          colorCalls.push([color, value]);
-          return value;
+  test.each(["openai", "openai-codex"])(
+    "labels the Codex quota source for %s models",
+    async (provider) => {
+      const fetchMock = stubUsageFetch(usageJsonResponse);
+      const harness = await createUsageHarness({
+        usageConfig: {
+          enabled: true,
+          refreshIntervalMs: 60000,
+          showOnlyOnSubscriptionModels: true,
+          showResetTimes: false,
         },
-      } as never,
-    );
-    expect(widget.render(200)[0]).toContain("Usage:");
-    expect(widget.render(200)[0]).toContain("5h: 90%");
-    expect(colorCalls).toContainEqual(["success", "90%"]);
-    expect(colorCalls).toContainEqual(["dim", "Usage: "]);
-    await emit(harness, "session_shutdown");
-  });
+        model: { provider, id: "gpt-5.5" } as ExtensionContext["model"],
+        isUsingOAuth: true,
+      });
+
+      await emit(harness, "session_start");
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(harness.ctx.ui.setWidget).toHaveBeenCalled());
+
+      const widgetFactory = vi.mocked(harness.ctx.ui.setWidget).mock.calls.at(-1)?.[1];
+      expect(widgetFactory).toEqual(expect.any(Function));
+      if (typeof widgetFactory !== "function") throw new Error("Expected a status widget factory");
+      const colorCalls: Array<[string, string]> = [];
+      const widget = widgetFactory(
+        {} as never,
+        {
+          fg: (color: string, value: string) => {
+            colorCalls.push([color, value]);
+            return value;
+          },
+        } as never,
+      );
+      expect(widget.render(200)[0]).toContain("Usage:");
+      expect(widget.render(200)[0]).toContain("5h: 90%");
+      expect(colorCalls).toContainEqual(["success", "90%"]);
+      expect(colorCalls).toContainEqual(["dim", "Usage: "]);
+      if (provider === "openai") expect(widget.render(200)[0]).toContain("Codex Usage:");
+      else expect(widget.render(200)[0]).not.toContain("Codex Usage:");
+      await harness.commands.get("openai-usage")!.handler("", harness.ctx);
+      if (provider === "openai") {
+        expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+          expect.stringContaining("not verified against the active OpenAI login"),
+          "info",
+        );
+      }
+      await emit(harness, "session_shutdown");
+    },
+  );
 
   test("stops interval polling when the session signal aborts", async () => {
     vi.useFakeTimers();
