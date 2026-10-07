@@ -1,17 +1,21 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getCodexCredentials, type CodexCredentials } from "./codex-auth.ts";
+import {
+  CodexIdentityRefusedError,
+  requireCodexCredentials,
+  verifyPinnedCodexCredentials,
+  type CodexCredentials,
+} from "./codex-auth.ts";
 import { formatPercent, type UsageSnapshot } from "./usage.ts";
 
 export const RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 export const CONSUME_RESET_URL =
   "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
 
-// Auto-redeem fires in the final minute before expiry. The automatic flow
-// (credentials, a fresh credit re-check, reservation, and consume POST) shares
-// one 10s abort deadline, so a 60s lead still leaves the server tens of seconds
-// of headroom while spending the credit as late as safely possible.
-export const BANKED_RESET_AUTO_REDEEM_LEAD_MS = 60_000;
+// Auto-redeem fires ten minutes before expiry to leave more headroom than a
+// last-minute attempt. The automatic flow (credentials, a fresh credit re-check,
+// reservation, and consume POST) still shares one 10s abort deadline.
+export const BANKED_RESET_AUTO_REDEEM_LEAD_MS = 10 * 60_000;
 
 export type BankedResetStatus = "available" | "redeeming" | "redeemed" | "unknown";
 
@@ -237,8 +241,15 @@ export async function requestBankedResetCredits(
 ): Promise<BankedResetCredits | undefined> {
   const ctx = isAbortSignal(ctxOrSignal) ? undefined : ctxOrSignal;
   const requestSignal = isAbortSignal(ctxOrSignal) ? ctxOrSignal : signal;
-  const credentials = pinnedCredentials ?? (await getCodexCredentials(ctx, requestSignal));
-  if (!credentials) return undefined;
+  let credentials;
+  try {
+    credentials = pinnedCredentials
+      ? await verifyPinnedCodexCredentials(ctx, pinnedCredentials, requestSignal)
+      : await requireCodexCredentials(ctx, "/openai-resets", "", requestSignal);
+  } catch (error) {
+    if (error instanceof CodexIdentityRefusedError || requestSignal?.aborted) throw error;
+    return undefined;
+  }
   const response = await fetch(RESET_CREDITS_URL, {
     headers: {
       accept: "*/*",
@@ -259,10 +270,15 @@ export async function consumeBankedReset(
   pinnedCredentials?: CodexCredentials,
 ): Promise<ConsumeBankedResetResult> {
   if (!creditId?.trim()) throw new Error("An explicit banked reset credit is required.");
-  const credentials = pinnedCredentials ?? (await getCodexCredentials(ctx, signal));
+  const credentials = pinnedCredentials
+    ? await verifyPinnedCodexCredentials(ctx, pinnedCredentials, signal)
+    : await requireCodexCredentials(
+        ctx,
+        "/openai-resets",
+        "OpenAI Codex authentication is unavailable. Run /login openai-codex.",
+        signal,
+      );
   signal?.throwIfAborted();
-  if (!credentials)
-    throw new Error("OpenAI Codex authentication is unavailable. Run /login first.");
   const response = await fetch(CONSUME_RESET_URL, {
     method: "POST",
     headers: {

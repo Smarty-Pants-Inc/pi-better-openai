@@ -454,6 +454,35 @@ describe("requestCodexUsage", () => {
     });
   });
 
+  test("never substitutes OpenAI direct OAuth for Codex backend auth", async () => {
+    const agentDir = createTempDir("pi-better-openai-usage-agent-");
+    const access = codexJwt("acct_openai_only");
+    writeFileSync(
+      join(agentDir, "auth.json"),
+      JSON.stringify({
+        openai: {
+          type: "oauth",
+          access,
+          accountId: "acct_openai_only",
+          expires: Date.now() + 3600000,
+        },
+      }),
+    );
+    const fetchMock = stubUsageFetch(usageJsonResponse);
+    const usage = await importUsageWithAgentDir(agentDir);
+    const getApiKeyForProvider = vi.fn(async (provider: string) =>
+      provider === "openai" ? access : undefined,
+    );
+    const ctx = {
+      model: { provider: "openai", id: "gpt-5.5" },
+      modelRegistry: { getApiKeyForProvider },
+    } as unknown as ExtensionContext;
+
+    await expect(usage.requestCodexUsage(ctx)).resolves.toBeUndefined();
+    expect(getApiKeyForProvider).toHaveBeenCalledExactlyOnceWith("openai-codex");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   test("returns undefined without fetch when isolated auth is missing", async () => {
     const agentDir = createTempDir("pi-better-openai-usage-agent-");
     const fetchMock = stubUsageFetch(usageJsonResponse());
@@ -543,41 +572,54 @@ describe("usage polling lifecycle", () => {
     ]);
   });
 
-  test("fetches usage for OAuth OpenAI models and updates status text", async () => {
-    const fetchMock = stubUsageFetch(usageJsonResponse);
-    const harness = await createUsageHarness({
-      usageConfig: {
-        enabled: true,
-        refreshIntervalMs: 60000,
-        showOnlyOnSubscriptionModels: true,
-        showResetTimes: false,
-      },
-      isUsingOAuth: true,
-    });
-
-    await emit(harness, "session_start");
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(harness.ctx.ui.setWidget).toHaveBeenCalled());
-
-    const widgetFactory = vi.mocked(harness.ctx.ui.setWidget).mock.calls.at(-1)?.[1];
-    expect(widgetFactory).toEqual(expect.any(Function));
-    if (typeof widgetFactory !== "function") throw new Error("Expected a status widget factory");
-    const colorCalls: Array<[string, string]> = [];
-    const widget = widgetFactory(
-      {} as never,
-      {
-        fg: (color: string, value: string) => {
-          colorCalls.push([color, value]);
-          return value;
+  test.each(["openai", "openai-codex"])(
+    "labels the Codex quota source for %s models",
+    async (provider) => {
+      const fetchMock = stubUsageFetch(usageJsonResponse);
+      const harness = await createUsageHarness({
+        usageConfig: {
+          enabled: true,
+          refreshIntervalMs: 60000,
+          showOnlyOnSubscriptionModels: true,
+          showResetTimes: false,
         },
-      } as never,
-    );
-    expect(widget.render(200)[0]).toContain("Usage:");
-    expect(widget.render(200)[0]).toContain("5h: 90%");
-    expect(colorCalls).toContainEqual(["success", "90%"]);
-    expect(colorCalls).toContainEqual(["dim", "Usage: "]);
-    await emit(harness, "session_shutdown");
-  });
+        model: { provider, id: "gpt-5.5" } as ExtensionContext["model"],
+        isUsingOAuth: true,
+      });
+
+      await emit(harness, "session_start");
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(harness.ctx.ui.setWidget).toHaveBeenCalled());
+
+      const widgetFactory = vi.mocked(harness.ctx.ui.setWidget).mock.calls.at(-1)?.[1];
+      expect(widgetFactory).toEqual(expect.any(Function));
+      if (typeof widgetFactory !== "function") throw new Error("Expected a status widget factory");
+      const colorCalls: Array<[string, string]> = [];
+      const widget = widgetFactory(
+        {} as never,
+        {
+          fg: (color: string, value: string) => {
+            colorCalls.push([color, value]);
+            return value;
+          },
+        } as never,
+      );
+      expect(widget.render(200)[0]).toContain("Usage:");
+      expect(widget.render(200)[0]).toContain("5h: 90%");
+      expect(colorCalls).toContainEqual(["success", "90%"]);
+      expect(colorCalls).toContainEqual(["dim", "Usage: "]);
+      if (provider === "openai") expect(widget.render(200)[0]).toContain("Codex Usage:");
+      else expect(widget.render(200)[0]).not.toContain("Codex Usage:");
+      await harness.commands.get("openai-usage")!.handler("", harness.ctx);
+      if (provider === "openai") {
+        expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+          expect.stringContaining("not verified against the active OpenAI login"),
+          "info",
+        );
+      }
+      await emit(harness, "session_shutdown");
+    },
+  );
 
   test("stops interval polling when the session signal aborts", async () => {
     vi.useFakeTimers();
@@ -753,28 +795,32 @@ function codexJwt(accountId: string): string {
 
 function fakeMultiproviderService() {
   type ChangedEvent = { providerId: string; account: unknown; ctx: ExtensionContext };
-  type Auth = { accessToken: string; label: string; source?: string } | undefined;
-  const listeners = new Set<(event: ChangedEvent) => void>();
+  type Auth = { id?: string; accessToken: string; label: string; source?: string } | undefined;
+  type Active = { id: string; label: string; authKind: string };
+  const listeners = new Map<(event: ChangedEvent) => void, string>();
+  let pins: Record<string, Active> = {};
   let resolveAuth: () => Promise<Auth> = async () => undefined;
   const resolveActiveAccountAuth = vi.fn(async () => resolveAuth());
   const value = {
-    getActiveAccount: vi.fn(async () => undefined),
+    getActiveAccount: vi.fn(async (provider: string) => pins[provider]),
     resolveActiveAccountAuth,
-    onActiveAccountChanged: vi.fn(
-      (_providerId: string, listener: (event: ChangedEvent) => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    ),
+    onActiveAccountChanged: vi.fn((provider: string, listener: (event: ChangedEvent) => void) => {
+      listeners.set(listener, provider);
+      return () => listeners.delete(listener);
+    }),
   } as unknown as MultiproviderService;
   return {
     value,
     resolveActiveAccountAuth,
+    pin(next: Record<string, Active>) {
+      pins = next;
+    },
     resolve(next: () => Promise<Auth>) {
       resolveAuth = next;
     },
     notifyAccountChanged(event: ChangedEvent) {
-      for (const listener of listeners) listener(event);
+      for (const [listener, provider] of listeners)
+        if (event.providerId === provider) listener(event);
     },
   };
 }
@@ -792,6 +838,77 @@ function widgetLine(harness: UsageHarness): string {
 }
 
 describe("multiprovider resume", () => {
+  test.each(["openai", "openai-codex"])(
+    "%s switch/resume refreshes usage AND resets without substituting default auth for an unresolved pin",
+    async (providerId) => {
+      const fetchMock = vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              rate_limit: { primary_window: { used_percent: 10, reset_after_seconds: 60 } },
+              credits: [],
+              available_count: 0,
+            }),
+          ),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const harness = await createUsageHarness({
+        model: { provider: providerId, id: "gpt-5.5" } as ExtensionContext["model"],
+      });
+      const service = fakeMultiproviderService();
+      harness.publishService(service.value);
+      harness.publishService(service.value);
+      expect(service.value.onActiveAccountChanged).toHaveBeenCalledTimes(2);
+      expect(service.value.onActiveAccountChanged).toHaveBeenCalledWith(
+        "openai",
+        expect.any(Function),
+      );
+      expect(service.value.onActiveAccountChanged).toHaveBeenCalledWith(
+        "openai-codex",
+        expect.any(Function),
+      );
+      await emit(harness, "session_start");
+      await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2));
+      await settleAsyncWork();
+      const resetFetches = fetchMock.mock.calls.filter(([url]: unknown[]) =>
+        String(url).includes("reset-credits"),
+      ).length;
+      expect(resetFetches).toBeGreaterThan(0);
+      const countBeforePin = fetchMock.mock.calls.length;
+      service.pin({ [providerId]: { id: "slot_resumed", label: "Shared", authKind: "oauth" } });
+      service.notifyAccountChanged({
+        providerId,
+        account: { id: "slot_resumed" },
+        ctx: harness.ctx,
+      });
+      await settleAsyncWork();
+      await settleAsyncWork();
+      expect(fetchMock.mock.calls.length).toBe(countBeforePin);
+      await harness.commands.get("openai-usage")!.handler("", harness.ctx);
+      expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+        expect.stringContaining("Another account is never used"),
+        "warning",
+      );
+      await harness.commands.get("openai-resets")!.handler("", harness.ctx);
+      expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+        expect.stringContaining("Another account is never used"),
+        "warning",
+      );
+      expect(fetchMock.mock.calls.length).toBe(countBeforePin);
+      // Clearing the restored pin proves both controllers were refreshed: both endpoints work again.
+      service.pin({});
+      service.notifyAccountChanged({ providerId, account: undefined, ctx: harness.ctx });
+      await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(countBeforePin));
+      await settleAsyncWork();
+      expect(
+        fetchMock.mock.calls.filter(([url]: unknown[]) => String(url).includes("reset-credits"))
+          .length,
+      ).toBeGreaterThan(resetFetches);
+      await emit(harness, "session_shutdown");
+    },
+  );
+
   test("repaints usage with the account a resumed session restores", async () => {
     // Usage is account-scoped: the upstream credential and the pooled account
     // report different numbers, so the widget line identifies who was charged.
@@ -838,6 +955,7 @@ describe("multiprovider resume", () => {
     await vi.waitFor(() => expect(widgetLine(harness)).toContain("5h: 90%"));
 
     // The replay then restores the account and tells followers about it.
+    service.pin({ "openai-codex": { id: "slot_pinned", label: "Work", authKind: "oauth" } });
     service.resolve(async () => ({
       accessToken: codexJwt("acct_pinned"),
       label: "Work",
