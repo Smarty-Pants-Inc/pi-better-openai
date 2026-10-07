@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.13
 
 - Add a native OpenAI Decisions compatibility classifier for hosts without upstream support, preserving OpenAI chat/auth and deferring to the host adapter when available.
 - Support typed predicates, choices, scores, inline images, cancellation, hooks, HTTP retries, and input-only usage accounting through native codemode and pi-fabric.
