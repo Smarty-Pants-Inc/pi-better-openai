@@ -18,16 +18,26 @@ import { makeResolvedConfig } from "./helpers.ts";
 
 vi.mock("../src/codex-auth.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/codex-auth.ts")>();
+  const resolve = vi.fn(async (ctx?: Pick<ExtensionContext, "modelRegistry">) => {
+    const registryToken = await ctx?.modelRegistry
+      ?.getApiKeyForProvider("openai-codex")
+      .catch(() => undefined);
+    const registryCredentials = actual.parseCodexRegistryCredentials(registryToken);
+    return registryCredentials ? { ...registryCredentials, source: "modelRegistry" } : undefined;
+  });
   return {
     ...actual,
     readCodexAuth: vi.fn(() => undefined),
-    getCodexCredentials: vi.fn(async (ctx?: Pick<ExtensionContext, "modelRegistry">) => {
-      const registryToken = await ctx?.modelRegistry
-        ?.getApiKeyForProvider("openai-codex")
-        .catch(() => undefined);
-      const registryCredentials = actual.parseCodexRegistryCredentials(registryToken);
-      return registryCredentials ? { ...registryCredentials, source: "modelRegistry" } : undefined;
-    }),
+    getCodexCredentials: resolve,
+    requireCodexCredentials: async (
+      ctx: Pick<ExtensionContext, "modelRegistry"> | undefined,
+      _command: string,
+      missing: string,
+    ) => {
+      const credentials = await resolve(ctx);
+      if (!credentials) throw new Error(missing);
+      return credentials;
+    },
   };
 });
 

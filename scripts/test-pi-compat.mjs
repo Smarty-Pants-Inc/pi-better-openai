@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +20,7 @@ try {
     SettingsManager,
     VERSION,
   } = await import("@earendil-works/pi-coding-agent");
-  assert.equal(VERSION, "1.0.0", "test the actual pinned Pi host, not a stale override");
+  assert.equal(VERSION, "1.0.2", "test the actual pinned Pi host, not a stale override");
   const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   for (const name of [
     "@earendil-works/pi-ai",
@@ -56,6 +56,20 @@ try {
   assert.deepEqual(loaded.errors, []);
   assert.deepEqual(loaded.warnings ?? [], []);
   assert.ok(loaded.extensions.length > 0, "manifest entrypoints must load");
+  // Synthetic direct-OpenAI credentials only; never read the user's auth store.
+  await writeFile(
+    join(home, "auth.json"),
+    JSON.stringify({
+      openai: {
+        type: "oauth",
+        access: "synthetic-openai-subscription-token",
+        refresh: "synthetic-refresh",
+        expires: Date.now() + 3600000,
+        clientId: "synthetic-client",
+        scopes: ["chatgpt.tokens.use.direct"],
+      },
+    }),
+  );
   const modelRuntime = await ModelRuntime.create({
     authPath: join(home, "auth.json"),
     modelsPath: null,
@@ -73,6 +87,39 @@ try {
   const errors = [];
   session.extensionRunner.onError((error) => errors.push(error));
   await session.bindExtensions({});
+  assert.equal(modelRuntime.getProvider("openai")?.auth?.oauth?.isSubscription, true);
+  assert.match(modelRuntime.getProvider("openai-codex")?.name ?? "", /legacy/i);
+  assert.equal(
+    modelRuntime.getRegisteredProviderIds().includes("openai"),
+    false,
+    "keep native OpenAI auth and transport",
+  );
+  assert.equal(modelRuntime.isUsingOAuth("openai"), true);
+  assert.equal(modelRuntime.isUsingSubscription("openai"), true);
+  assert.equal(
+    (await modelRuntime.getAuth("openai"))?.auth.apiKey,
+    "synthetic-openai-subscription-token",
+  );
+  assert.equal(
+    await modelRuntime.getAuth("openai-codex"),
+    undefined,
+    "OpenAI OAuth is not Codex backend auth",
+  );
+  const openaiModel = modelRuntime.getModel("openai", "gpt-6-astra");
+  assert.equal(openaiModel?.api, "openai-responses");
+  assert.equal(openaiModel?.baseUrl, "https://api.openai.com/v1");
+  assert.ok(
+    modelRuntime.getModel("openai-codex", "gpt-6.1-sol"),
+    "legacy fallback models remain registered",
+  );
+  await modelRuntime.setRuntimeApiKey("openai", "synthetic-api-key");
+  assert.equal(
+    modelRuntime.isUsingOAuth("openai"),
+    false,
+    "API key overrides must remain API-only",
+  );
+  await modelRuntime.removeRuntimeApiKey("openai");
+  assert.equal(modelRuntime.isUsingOAuth("openai"), true);
   await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
   assert.deepEqual(errors, [], "real session startup and shutdown must succeed");
   const names = new Set();
@@ -90,7 +137,7 @@ try {
     }
   }
   console.log(
-    `${manifest.name}: Pi ${VERSION} warning-free manifest load; ${loaded.extensions.length} extensions, ${names.size} tools registered`,
+    `${manifest.name}: Pi ${VERSION} warning-free manifest load; ${loaded.extensions.length} extensions, ${names.size} tools registered; OpenAI subscription/API-key auth isolation verified`,
   );
 } finally {
   if (session) {

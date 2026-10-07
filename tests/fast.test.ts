@@ -146,6 +146,32 @@ describe("service tiers", () => {
     },
   );
 
+  test("keeps Ultrafast API-only when OpenAI switches to ChatGPT OAuth", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, { serviceTier: "ultrafast", supportedModels: undefined });
+    const h = createHarness(cwd, createModel("openai", "gpt-6-astra"));
+    await emit(h, "session_start");
+    const payload = { model: "gpt-6-astra" };
+    expect(await beforeProviderRequest(h, payload)).toMatchObject({ service_tier: "ultrafast" });
+
+    vi.mocked(h.ctx.modelRegistry.isUsingOAuth).mockReturnValue(true);
+    expect(await beforeProviderRequest(h, payload)).toBeUndefined();
+    expect(readRawConfig(configPaths(cwd).project).serviceTier).toBe("ultrafast");
+    await h.commands.get("openai-tier")!.handler("ultrafast", h.ctx);
+    expect(h.ctx.ui.notify).toHaveBeenLastCalledWith(
+      expect.stringContaining("inactive"),
+      "warning",
+    );
+    await h.commands.get("openai-tier")!.handler("fast", h.ctx);
+    expect(await beforeProviderRequest(h, payload)).toMatchObject({ service_tier: "priority" });
+    await h.commands.get("openai-tier")!.handler("standard", h.ctx);
+    expect(await beforeProviderRequest(h, payload)).toMatchObject({ service_tier: "default" });
+
+    vi.mocked(h.ctx.modelRegistry.isUsingOAuth).mockReturnValue(false);
+    await h.commands.get("openai-tier")!.handler("ultrafast", h.ctx);
+    expect(await beforeProviderRequest(h, payload)).toMatchObject({ service_tier: "ultrafast" });
+  });
+
   test("selects and persists Ultrafast, discloses cost, and explicitly restores Standard", async () => {
     const cwd = createTempProject();
     writeProjectConfig(cwd, { unknown: "keep", serviceTier: "standard" });

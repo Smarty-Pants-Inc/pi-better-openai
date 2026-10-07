@@ -17,7 +17,23 @@ import {
 } from "../src/resets.ts";
 
 // Never consult real credentials or send a real request in these tests.
-vi.mock("../src/codex-auth.ts", () => ({ getCodexCredentials: vi.fn() }));
+vi.mock("../src/codex-auth.ts", async (importOriginal) => {
+  const resolve = vi.fn();
+  return {
+    ...(await importOriginal<typeof import("../src/codex-auth.ts")>()),
+    getCodexCredentials: resolve,
+    requireCodexCredentials: async (
+      ctx: unknown,
+      _command: string,
+      missing: string,
+      signal?: AbortSignal,
+    ) => {
+      const credentials = await resolve(ctx, signal);
+      if (!credentials) throw new Error(missing);
+      return credentials;
+    },
+  };
+});
 
 const NOW = Date.parse("2026-09-21T00:00:00Z");
 const LEAD_MS = BANKED_RESET_AUTO_REDEEM_LEAD_MS;
@@ -100,10 +116,11 @@ afterEach(() => {
 });
 
 describe("automatic banked reset redemption (mocked transport only)", () => {
-  test("waits until exactly the auto-redeem lead before expiry and spends only one explicit credit", async () => {
+  test("waits until exactly ten minutes before expiry and spends only one explicit credit", async () => {
+    rows = [row("first", NOW + 20 * 60_000), row("second", NOW + 20 * 60_000)];
     const onRedeemed = vi.fn();
     const target = await start(controller(() => true, onRedeemed));
-    await vi.advanceTimersByTimeAsync(LEAD_MS - 1);
+    await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
     expect(posts()).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
     expect(posts()).toHaveLength(1);
@@ -116,6 +133,18 @@ describe("automatic banked reset redemption (mocked transport only)", () => {
     await vi.advanceTimersByTimeAsync(15 * 60_000);
     expect(posts()).toHaveLength(1);
   });
+
+  test.each([10 * 60_000, 5 * 60_000, 1_000])(
+    "redeems once when starting with %i ms left in the final ten-minute window",
+    async (remainingMs) => {
+      rows = [row("first", NOW + remainingMs), row("second", NOW + remainingMs)];
+      await start();
+      expect(posts()).toHaveLength(1);
+      expect(JSON.parse(posts()[0]![1]!.body as string).credit_id).toBe("first");
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(posts()).toHaveLength(1);
+    },
+  );
 
   test.each([
     "reset",
@@ -138,10 +167,10 @@ describe("automatic banked reset redemption (mocked transport only)", () => {
     expect(posts()).toHaveLength(1);
   });
 
-  test("does not fall back when the scheduled credit was redeemed elsewhere", async () => {
+  test("does not fall back across polling refreshes when the scheduled credit was redeemed elsewhere", async () => {
     await start();
     rows[0]!.status = "redeemed";
-    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await vi.advanceTimersByTimeAsync(2 * LEAD_MS);
     expect(posts()).toHaveLength(0);
   });
 
@@ -339,7 +368,7 @@ describe("expiry notes", () => {
       ],
     }).credits;
     const labels = credits.map((credit, index) => {
-      const expected = new Date(credit.expiresAtMs! - LEAD_MS).toLocaleString(undefined, {
+      const expected = new Date(credit.expiresAtMs! - 10 * 60_000).toLocaleString(undefined, {
         month: "short",
         day: "numeric",
         hour: "numeric",

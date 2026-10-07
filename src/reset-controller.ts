@@ -1,5 +1,12 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getCodexCredentials } from "./codex-auth.ts";
+import {
+  CODEX_AUTH_REQUIRED,
+  CodexIdentityRefusedError,
+  requireCodexCredentials,
+  sameCodexIdentity,
+  verifyPinnedCodexCredentials,
+  type CodexCredentials,
+} from "./codex-auth.ts";
 import { sanitizeDiagnosticError } from "./format.ts";
 import { reserveBankedResetRedemption } from "./reset-guard.ts";
 import {
@@ -18,6 +25,8 @@ export const BANKED_RESET_CACHE_TTL_MS = 5 * 60_000;
 const BANKED_RESET_REQUEST_TIMEOUT_MS = 10_000;
 
 export type BankedResetCache = {
+  /** The identity that supplied these credits, retained by open dialogs/timers. */
+  credentials: CodexCredentials;
   credits: BankedResetCredits;
   updatedAt: number;
 };
@@ -31,6 +40,7 @@ export class ResetController {
   private inFlight: Promise<void> | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private autoTimer: ReturnType<typeof setTimeout> | undefined;
+  private autoIdentity: CodexCredentials | undefined;
   private sessionSignal: AbortSignal | undefined;
   private sessionAbortHandler: (() => void) | undefined;
   private lifetime = new AbortController();
@@ -85,16 +95,23 @@ export class ResetController {
     const signal = this.requestSignal(ctx);
     const task = (async () => {
       try {
-        const credits = await requestBankedResetCredits(ctx, signal);
+        const credentials = await requireCodexCredentials(
+          ctx,
+          "/openai-resets",
+          CODEX_AUTH_REQUIRED,
+          signal,
+        );
+        const credits = await requestBankedResetCredits(ctx, signal, credentials);
         if (signal.aborted || generation !== this.generation) return;
         if (credits) {
-          this.cache = { credits, updatedAt: Date.now() };
+          this.cache = { credits, credentials, updatedAt: Date.now() };
           this.error = undefined;
         } else {
-          this.error = "OpenAI Codex credentials unavailable.";
+          this.error = CODEX_AUTH_REQUIRED;
         }
       } catch (error) {
         if (generation !== this.generation || signal.aborted) return;
+        if (error instanceof CodexIdentityRefusedError) this.cache = undefined;
         this.error = sanitizeDiagnosticError(
           error instanceof Error ? error.message : String(error),
         );
@@ -120,7 +137,11 @@ export class ResetController {
     };
   }
 
-  async redeem(ctx: ExtensionContext, creditId: string): Promise<ConsumeBankedResetResult> {
+  async redeem(
+    ctx: ExtensionContext,
+    creditId: string,
+    pinnedCredentials = this.cache?.credentials,
+  ): Promise<ConsumeBankedResetResult> {
     if (!creditId) throw new Error("An explicit banked reset credit is required.");
     if (this.redeeming) throw new Error("A banked reset redemption is already in progress.");
     this.redeeming = true;
@@ -128,9 +149,21 @@ export class ResetController {
     this.blockedUntilMs = Date.now() + BANKED_RESET_AUTO_REDEEM_LEAD_MS;
     try {
       const signal = this.requestSignal(ctx);
-      const credentials = await getCodexCredentials(ctx, signal);
+      if (!pinnedCredentials)
+        throw new CodexIdentityRefusedError(
+          "/openai-resets: no account-bound reset snapshot; no reset was spent.",
+        );
+      const credentials = await verifyPinnedCodexCredentials(ctx, pinnedCredentials, signal);
+      const fresh = await requestBankedResetCredits(ctx, signal, credentials);
+      const credit = fresh?.credits.find(
+        (row) => row.id === creditId && row.status === "available",
+      );
+      if (!credit || !fresh || fresh.availableCount <= 0 || fresh.applicableCount === 0)
+        throw new Error("The confirmed banked reset is no longer available; no reset was spent.");
+      await verifyPinnedCodexCredentials(ctx, credentials, signal);
       signal.throwIfAborted();
-      if (!credentials) throw new Error("OpenAI Codex credentials unavailable.");
+      if (generation !== this.generation)
+        throw new CodexIdentityRefusedError("/openai-resets: session changed; no reset was spent.");
       if (!reserveBankedResetRedemption(credentials.accountId, creditId))
         throw new Error(
           "A banked reset was already attempted recently; no additional credit was spent.",
@@ -147,6 +180,7 @@ export class ResetController {
   private clearAutoTimer(): void {
     if (this.autoTimer) clearTimeout(this.autoTimer);
     this.autoTimer = undefined;
+    this.autoIdentity = undefined;
   }
 
   private canAutoRedeem(ctx: ExtensionContext): boolean {
@@ -159,7 +193,10 @@ export class ResetController {
     );
   }
 
-  private scheduleAutoRedeem(): void {
+  private scheduleAutoRedeem(scheduled?: {
+    credit: BankedResetCredit;
+    credentials: CodexCredentials;
+  }): void {
     const ctx = this.activeCtx;
     if (!ctx || this.redeeming) return;
     try {
@@ -169,9 +206,18 @@ export class ResetController {
       }
       // A cache refresh must not replace a due timer with the next credit,
       // particularly when the scheduled one was redeemed in another client.
-      if (this.autoTimer) return;
-      const credit = selectAutoRedeemCredit(this.cache?.credits.credits ?? []);
-      if (!credit || credit.expiresAtMs === null) return;
+      // An account switch re-arms for the newly selected account's own credits:
+      // the old account's attempt would refuse, and the new one may expire first.
+      const cached = this.cache?.credentials;
+      const switched = (armed: CodexCredentials) => !!cached && !sameCodexIdentity(armed, cached);
+      if (this.autoTimer) {
+        if (!this.autoIdentity || !switched(this.autoIdentity)) return;
+        this.clearAutoTimer();
+      }
+      if (scheduled && switched(scheduled.credentials)) scheduled = undefined;
+      const credit = scheduled?.credit ?? selectAutoRedeemCredit(this.cache?.credits.credits ?? []);
+      const credentials = scheduled?.credentials ?? this.cache?.credentials;
+      if (!credit || !credentials || credit.expiresAtMs === null) return;
       const dueAt = Math.max(
         credit.expiresAtMs - BANKED_RESET_AUTO_REDEEM_LEAD_MS,
         this.blockedUntilMs,
@@ -179,19 +225,26 @@ export class ResetController {
       this.autoTimer = setTimeout(
         () => {
           this.autoTimer = undefined;
-          if (Date.now() < dueAt) this.scheduleAutoRedeem();
-          else void this.autoRedeem(ctx, credit);
+          // Preserve the exact credit across capped timer wakeups, even when
+          // a polling refresh has changed the cached credit list.
+          if (Date.now() < dueAt) this.scheduleAutoRedeem({ credit, credentials });
+          else void this.autoRedeem(ctx, credit, credentials);
         },
         Math.max(0, Math.min(dueAt - Date.now(), BANKED_RESET_CACHE_TTL_MS)),
       );
       this.autoTimer.unref?.();
+      this.autoIdentity = credentials;
     } catch {
       // Stale extension contexts must not leave a background timer running.
       this.stop();
     }
   }
 
-  private async autoRedeem(ctx: ExtensionContext, scheduled: BankedResetCredit): Promise<void> {
+  private async autoRedeem(
+    ctx: ExtensionContext,
+    scheduled: BankedResetCredit,
+    credentials: CodexCredentials,
+  ): Promise<void> {
     const generation = this.generation;
     let ownsRedemption = false;
     try {
@@ -202,12 +255,10 @@ export class ResetController {
       // credit. The persistent reservation below enforces this across processes.
       this.blockedUntilMs = Date.now() + BANKED_RESET_AUTO_REDEEM_LEAD_MS;
       const signal = this.requestSignal(ctx);
-      const credentials = await getCodexCredentials(ctx, signal);
-      if (!credentials) return;
       const fresh = await requestBankedResetCredits(ctx, signal, credentials);
       if (signal.aborted || generation !== this.generation || !this.canAutoRedeem(ctx)) return;
       if (!fresh) return;
-      this.cache = { credits: fresh, updatedAt: Date.now() };
+      this.cache = { credits: fresh, credentials, updatedAt: Date.now() };
       this.error = undefined;
       const credit = selectAutoRedeemCredit(fresh.credits.filter((row) => row.id === scheduled.id));
       if (
@@ -218,6 +269,9 @@ export class ResetController {
         credit.expiresAtMs - Date.now() > BANKED_RESET_AUTO_REDEEM_LEAD_MS
       )
         return;
+      await verifyPinnedCodexCredentials(ctx, credentials, signal);
+      signal.throwIfAborted();
+      if (generation !== this.generation || !this.canAutoRedeem(ctx)) return;
       if (
         !reserveBankedResetRedemption(credentials.accountId, credit.id, {
           expiresAtMs: credit.expiresAtMs,

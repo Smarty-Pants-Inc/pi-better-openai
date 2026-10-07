@@ -8,11 +8,13 @@ import {
 } from "./config.ts";
 import {
   type CodexCredentials,
-  getCodexCredentials,
+  CODEX_AUTH_REQUIRED,
+  requireCodexCredentials,
   type CodexCredentialsWithSource,
 } from "./codex-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
 import { resolveProviderRoute } from "./provider-route.ts";
+import { registerOptionalTool, type OptionalTool } from "./optional-tool.ts";
 
 export const OPENAI_WEBSEARCH_TOOL = "openai_websearch";
 export const OPENAI_WEBSEARCH_COMMAND = "openai-websearch";
@@ -106,12 +108,13 @@ async function resolveSearchRoute(
 ): Promise<SearchRoute> {
   const provider = cfg.websearch.provider;
   if (!provider) {
-    const credentials = await getCodexCredentials(ctx, signal);
-    if (credentials) return { url: CODEX_SEARCH_URL, credentials };
-    throw new WebSearchError(
-      "authentication_required",
-      "Missing openai-codex OAuth credentials. Run /login openai-codex, or set websearch.provider.",
+    const credentials = await requireCodexCredentials(
+      ctx,
+      "/openai-websearch",
+      `${CODEX_AUTH_REQUIRED} Alternatively, set websearch.provider.`,
+      signal,
     );
+    return { url: CODEX_SEARCH_URL, credentials };
   }
   let route: ReturnType<typeof resolveProviderRoute>;
   try {
@@ -358,7 +361,7 @@ async function requestWebSearch(
 export function registerOpenAIWebSearch(
   pi: ExtensionAPI,
   getConfig: (ctx: ExtensionContext) => ResolvedConfig,
-): { getDebug: (ctx: ExtensionContext) => Promise<WebSearchDebug> } {
+): OptionalTool & { getDebug: (ctx: ExtensionContext) => Promise<WebSearchDebug> } {
   let lastStatus: string | undefined;
   let lastError: string | undefined;
 
@@ -446,7 +449,7 @@ export function registerOpenAIWebSearch(
     },
   });
 
-  pi.registerTool({
+  const tool = registerOptionalTool(pi, {
     name: OPENAI_WEBSEARCH_TOOL,
     label: "OpenAI web search",
     description:
@@ -470,7 +473,7 @@ export function registerOpenAIWebSearch(
     },
   });
 
-  return { getDebug };
+  return { getDebug, ...tool };
 }
 
 export const _websearchTest = {
