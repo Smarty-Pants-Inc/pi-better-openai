@@ -16,7 +16,7 @@ import { ResetController } from "../src/reset-controller.ts";
 import * as resetGuard from "../src/reset-guard.ts";
 import { BANKED_RESET_AUTO_REDEEM_LEAD_MS } from "../src/resets.ts";
 import { requestCodexUsage } from "../src/usage.ts";
-import { consumeBankedReset, requestBankedResetCredits } from "../src/resets.ts";
+import { CONSUME_RESET_URL, consumeBankedReset, requestBankedResetCredits } from "../src/resets.ts";
 import { registerOpenAIImage } from "../src/image.ts";
 import { registerOpenAIWebSearch } from "../src/websearch.ts";
 import { makeResolvedConfig } from "./helpers.ts";
@@ -479,6 +479,7 @@ test("real bridge automatic reset retains scheduled A identity after a switch to
             {
               id: "credit_A",
               status: "available",
+              reset_type: "codex_rate_limits",
               expires_at: Date.now() + BANKED_RESET_AUTO_REDEEM_LEAD_MS + 1000,
             },
           ],
@@ -552,3 +553,138 @@ test.each(["image", "websearch"])(
     expect(h.fallback).not.toHaveBeenCalled();
   },
 );
+
+// pi-multiprovider 7571b77 (src/announcement.ts:57-86): implicit affinity can move
+// without an event, and resolveActiveAccountAuth returns no slot id. Both calls
+// capture the pinned slot synchronously, then await the account list.
+test("F3: unannounced implicit-affinity A->B->A around resolution never labels B's token as slot A", async () => {
+  const h = harness();
+  const tokens: Record<string, string> = { slot_A: jwt("acct_A"), slot_B: jwt("acct_B") };
+  let affinity = "slot_A";
+  let pinReads = 0;
+  h.service.getActiveAccount = vi.fn(async (provider: string) => {
+    if (provider !== "openai-codex") return undefined;
+    const id = affinity;
+    pinReads++;
+    await Promise.resolve(); // integration.accounts()
+    if (pinReads === 1) affinity = "slot_B"; // implicit move after A's pin read, no event
+    return pin(id);
+  });
+  h.resolve.mockImplementation(async () => {
+    const id = affinity; // the bridge's own slot capture
+    await Promise.resolve();
+    affinity = "slot_A"; // back to A before the final re-read, no event
+    return { accessToken: tokens[id]!, label: "Shared", source: "oauth" };
+  });
+  expect(await resolveCodexIdentity(h.ctx)).toMatchObject({
+    kind: "refuse",
+    reason: "selected-unresolved",
+  });
+  expect(h.fallback).not.toHaveBeenCalled();
+});
+
+test("F3: an id-less auth labelled for another slot refuses, even when every pin read shows A", async () => {
+  const h = realBridgeHarness();
+  h.pins({ "openai-codex": pin("slot_A", "Alpha") });
+  h.resolve.mockImplementation(async () => ({
+    accessToken: jwt("acct_B"),
+    label: "Beta",
+    source: "oauth",
+  }));
+  await expect(requireCodexCredentials(h.ctx, "/probe")).rejects.toBeInstanceOf(
+    CodexIdentityRefusedError,
+  );
+  expect(h.fallback).not.toHaveBeenCalled();
+});
+
+const jwtV = (id: string, version: number) =>
+  `e30.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: id }, version })).toString("base64url")}.sig`;
+
+function autoRedeemNetwork(expiries: Record<string, number>) {
+  return vi.fn<typeof fetch>(async (url, init) => {
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    const account = headers["chatgpt-account-id"]!;
+    if (String(url) === CONSUME_RESET_URL) return new Response(JSON.stringify({ code: "reset" }));
+    return new Response(
+      JSON.stringify({
+        credits: [
+          {
+            id: `credit_${account}`,
+            status: "available",
+            reset_type: "codex_rate_limits",
+            expires_at: expiries[account],
+          },
+        ],
+        available_count: 1,
+      }),
+    );
+  });
+}
+
+test("auto-redeem re-arms for the newly selected account's sooner credit after a switch", async () => {
+  vi.useFakeTimers();
+  const h = realBridgeHarness();
+  h.ctx.ui = { notify: vi.fn() } as unknown as ExtensionContext["ui"];
+  let account = "acct_A";
+  h.refresh(async () => jwt(account));
+  const network = autoRedeemNetwork({
+    acct_A: Date.now() + BANKED_RESET_AUTO_REDEEM_LEAD_MS + 10 * 60 * 60_000,
+    acct_B: Date.now() + BANKED_RESET_AUTO_REDEEM_LEAD_MS + 60_000,
+  });
+  vi.stubGlobal("fetch", network);
+  const reserve = vi.spyOn(resetGuard, "reserveBankedResetRedemption").mockReturnValue(true);
+  const controller = new ResetController(() => true);
+  try {
+    controller.start(h.ctx);
+    await controller.refresh(h.ctx);
+    expect(controller.snapshot?.credentials.selection?.id).toBe("slot_A");
+    account = "acct_B";
+    h.change("slot_B");
+    await controller.refresh(h.ctx, { force: true });
+    expect(controller.snapshot?.credentials.selection?.id).toBe("slot_B");
+    await vi.advanceTimersByTimeAsync(61_000);
+    const posts = network.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(posts[0]![1]?.headers).toMatchObject({ "chatgpt-account-id": "acct_B" });
+    expect(JSON.parse(String(posts[0]![1]?.body))).toMatchObject({ credit_id: "credit_acct_B" });
+    expect(reserve).toHaveBeenCalledExactlyOnceWith("acct_B", "credit_acct_B", {
+      expiresAtMs: expect.any(Number),
+    });
+  } finally {
+    controller.stop();
+    reserve.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
+test("auto-redeem sends the current token for the same slot, not the one captured when armed", async () => {
+  vi.useFakeTimers();
+  const h = realBridgeHarness();
+  h.ctx.ui = { notify: vi.fn() } as unknown as ExtensionContext["ui"];
+  let version = 1;
+  h.refresh(async () => jwtV("acct_A", version));
+  const network = autoRedeemNetwork({
+    acct_A: Date.now() + BANKED_RESET_AUTO_REDEEM_LEAD_MS + 1000,
+  });
+  vi.stubGlobal("fetch", network);
+  const reserve = vi.spyOn(resetGuard, "reserveBankedResetRedemption").mockReturnValue(true);
+  const controller = new ResetController(() => true);
+  try {
+    controller.start(h.ctx);
+    await controller.refresh(h.ctx);
+    const armedCalls = network.mock.calls.length;
+    version = 2; // the bridge refreshed A's OAuth token after the timer was armed
+    await vi.advanceTimersByTimeAsync(1000);
+    const fired = network.mock.calls.slice(armedCalls);
+    expect(fired.some(([, init]) => init?.method === "POST")).toBe(true);
+    for (const [, init] of fired)
+      expect(init?.headers).toMatchObject({
+        authorization: `Bearer ${jwtV("acct_A", 2)}`,
+        "chatgpt-account-id": "acct_A",
+      });
+  } finally {
+    controller.stop();
+    reserve.mockRestore();
+    vi.useRealTimers();
+  }
+});

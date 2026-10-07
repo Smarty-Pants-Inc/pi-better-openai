@@ -222,14 +222,26 @@ export async function resolveCodexIdentity(
         // Native openai OAuth belongs to api.openai.com, even if it contains an account-id claim.
         if (pool !== CODEX_PROVIDER_ID)
           return { kind: "refuse", reason: "selected-provider-incompatible", selectedPool: pool };
-        const expectedId = pins.get(pool)!.id;
+        const expected = pins.get(pool)!;
+        const expectedId = expected.id;
         try {
-          const resolved = await waitForSignal(
-            service.resolveActiveAccountAuth(pool, ctx, signal),
+          // Implicit affinity can move A -> B -> A with no change event, and the bridge's
+          // auth carries no slot id. It captures its slot synchronously when called, so a
+          // selection read started in the same turn observes the slot it actually used.
+          const resolving = service.resolveActiveAccountAuth(pool, ctx, signal);
+          const used = service.getActiveAccount(pool, ctx);
+          const [resolved, usedAccount] = await waitForSignal(
+            Promise.all([resolving, used]),
             signal,
           );
           throwIfAborted(signal);
-          if (!resolved || (resolved.id !== undefined && resolved.id !== expectedId))
+          if (
+            !resolved ||
+            usedAccount?.id !== expectedId ||
+            (resolved.id !== undefined
+              ? resolved.id !== expectedId
+              : resolved.label !== expected.label)
+          )
             return { kind: "refuse", reason: "selected-unresolved", selectedPool: pool };
           const current = await readSelections(service, ctx, signal);
           if (
@@ -357,15 +369,22 @@ export async function verifyPinnedCodexCredentials(
       CODEX_AUTH_REQUIRED,
       signal,
     );
-    if (
-      current.accountId !== credentials.accountId ||
-      current.selection?.providerId !== credentials.selection?.providerId ||
-      current.selection?.id !== credentials.selection?.id
-    )
+    if (!sameCodexIdentity(current, credentials))
       throw new CodexIdentityRefusedError(
         "/openai-resets: selected account changed; no reset was spent.",
       );
+    throwIfAborted(signal);
+    // Same account and slot: send its current token, not one captured when a timer was armed.
+    return current;
   }
   throwIfAborted(signal);
   return credentials;
+}
+
+export function sameCodexIdentity(a: CodexCredentials, b: CodexCredentials): boolean {
+  return (
+    a.accountId === b.accountId &&
+    a.selection?.providerId === b.selection?.providerId &&
+    a.selection?.id === b.selection?.id
+  );
 }

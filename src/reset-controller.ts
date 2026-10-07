@@ -3,6 +3,7 @@ import {
   CODEX_AUTH_REQUIRED,
   CodexIdentityRefusedError,
   requireCodexCredentials,
+  sameCodexIdentity,
   verifyPinnedCodexCredentials,
   type CodexCredentials,
 } from "./codex-auth.ts";
@@ -39,6 +40,7 @@ export class ResetController {
   private inFlight: Promise<void> | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private autoTimer: ReturnType<typeof setTimeout> | undefined;
+  private autoIdentity: CodexCredentials | undefined;
   private sessionSignal: AbortSignal | undefined;
   private sessionAbortHandler: (() => void) | undefined;
   private lifetime = new AbortController();
@@ -178,6 +180,7 @@ export class ResetController {
   private clearAutoTimer(): void {
     if (this.autoTimer) clearTimeout(this.autoTimer);
     this.autoTimer = undefined;
+    this.autoIdentity = undefined;
   }
 
   private canAutoRedeem(ctx: ExtensionContext): boolean {
@@ -203,7 +206,15 @@ export class ResetController {
       }
       // A cache refresh must not replace a due timer with the next credit,
       // particularly when the scheduled one was redeemed in another client.
-      if (this.autoTimer) return;
+      // An account switch re-arms for the newly selected account's own credits:
+      // the old account's attempt would refuse, and the new one may expire first.
+      const cached = this.cache?.credentials;
+      const switched = (armed: CodexCredentials) => !!cached && !sameCodexIdentity(armed, cached);
+      if (this.autoTimer) {
+        if (!this.autoIdentity || !switched(this.autoIdentity)) return;
+        this.clearAutoTimer();
+      }
+      if (scheduled && switched(scheduled.credentials)) scheduled = undefined;
       const credit = scheduled?.credit ?? selectAutoRedeemCredit(this.cache?.credits.credits ?? []);
       const credentials = scheduled?.credentials ?? this.cache?.credentials;
       if (!credit || !credentials || credit.expiresAtMs === null) return;
@@ -222,6 +233,7 @@ export class ResetController {
         Math.max(0, Math.min(dueAt - Date.now(), BANKED_RESET_CACHE_TTL_MS)),
       );
       this.autoTimer.unref?.();
+      this.autoIdentity = credentials;
     } catch {
       // Stale extension contexts must not leave a background timer running.
       this.stop();
