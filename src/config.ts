@@ -678,7 +678,7 @@ export const DECISIONS_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] 
     currentValue: (cfg) => cfg.decisions.model,
     parse: stringSetting,
     description:
-      "Select with /openai-decisions use provider/model. OpenAI requires a published native classifier; Jev can be selected explicitly today.",
+      "Select with /openai-decisions use provider/model. OpenAI Decisions: openai/gpt-6-luna (API key only). Jev is also supported.",
   },
   {
     id: "decisions.timeoutMs",

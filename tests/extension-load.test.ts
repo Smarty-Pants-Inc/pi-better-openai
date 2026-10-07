@@ -36,7 +36,15 @@ test("loads through pi's real extension loader and registers the native Codex pr
     );
     expect(
       loaded.runtime.pendingNativeProviderRegistrations.map(({ provider }) => provider.id),
-    ).toContain("openai-codex");
+    ).toEqual(expect.arrayContaining(["openai-codex", "openai"]));
+    const provider = loaded.runtime.pendingNativeProviderRegistrations.find(
+      ({ provider }) => provider.id === "openai",
+    )!.provider;
+    expect(provider.getAllModels?.()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "classifier", id: "gpt-6-luna", api: "openai-decisions" }),
+      ]),
+    );
   } finally {
     loader.getExtensions().runtime.invalidate("Loader regression test complete");
     vi.unstubAllEnvs();
