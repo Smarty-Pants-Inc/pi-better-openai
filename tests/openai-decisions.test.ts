@@ -310,8 +310,13 @@ describe("OpenAI Decisions compatibility", () => {
     expect((await pending).stopReason).toBe("aborted");
   });
 
-  test("preserves native provider behavior and defers completely to a host Decisions adapter", () => {
-    const native = openai();
+  test("adds compatibility without changing an older host's existing provider behavior", () => {
+    const current = openai();
+    const native: Provider = {
+      ...current,
+      classify: undefined,
+      getAllModels: () => current.getAllModels!().filter((m) => m.type !== "classifier"),
+    };
     const provider = withOpenAIDecisions(native);
     for (const key of [
       "auth",
@@ -341,7 +346,8 @@ describe("OpenAI Decisions compatibility", () => {
     expect(withOpenAIDecisions(upcoming)).toBe(upcoming);
     const registerProvider = vi.fn();
     registerOpenAIDecisionsProvider({ registerProvider } as unknown as ExtensionAPI);
-    expect(registerProvider).toHaveBeenCalledOnce();
+    expect(registerProvider).not.toHaveBeenCalled();
+    expect(withOpenAIDecisions(current)).toBe(current);
   });
 
   test("uses the real Pi registry and existing opt-in tool without a second credential path", async () => {
@@ -362,7 +368,11 @@ describe("OpenAI Decisions compatibility", () => {
       type: "api_key",
       key: "synthetic-openai-key",
     }));
-    expect(await registry.getAvailableOfType("classifier", "openai")).toEqual([model]);
+    const nativeModel = provider.getAllModels!().find(
+      (m) => m.type === "classifier" && m.id === model.id,
+    );
+    expect(nativeModel).toBeDefined();
+    expect(await registry.getAvailableOfType("classifier", "openai")).toEqual([nativeModel]);
     const fetch = transport();
     const ctx = {
       modelRegistry: {

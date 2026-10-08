@@ -155,7 +155,7 @@ The footer shows `fast` or `ultrafast` only when supported by the current model.
 
 ## Typed decisions
 
-OpenAI's [Decisions API](https://developers.openai.com/api/docs/guides/decisions) is available as the native classifier `openai/gpt-6-luna`, **not a chat-completion fallback**. Upstream Pi has an adapter on `main`, but published Pi 1.0.4 does not. This extension supplies a compatibility implementation only when the host lacks one; a built-in Decisions adapter always wins. Native OpenAI chat models, authentication, and transport are preserved.
+OpenAI's [Decisions API](https://developers.openai.com/api/docs/guides/decisions) is available as the native classifier `openai/gpt-6-luna`, **not a chat-completion fallback**. Pi 1.1.0 ships the adapter, including native codemode image classification. This extension supplies a compatibility implementation only when the host lacks one; a built-in Decisions adapter always wins. Native OpenAI chat models, authentication, and transport are preserved.
 
 Use an **OpenAI API key** via `/login openai` or `OPENAI_API_KEY`. ChatGPT/Codex OAuth does not grant Decisions access. If `/login openai` stores OAuth, it takes precedence over the environment key: select the API-key login instead. No credentials are copied between providers. Catalog presence does not guarantee account entitlement.
 

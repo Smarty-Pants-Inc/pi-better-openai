@@ -14,7 +14,7 @@ Research checkpoint: September 29, 2026 (UTC). Announcements and account entitle
 
 The [public Decisions guide](https://developers.openai.com/api/docs/guides/decisions) now documents `POST /v1/decisions`, `gpt-6-luna`, predicates/choices/scores, inline image inputs, refusals, and input-only pricing. This supersedes the original research checkpoint above.
 
-Pi's upstream `main` includes `packages/ai/src/api/openai-decisions.ts` and an `openai` classifier registration. Published Pi 1.0.4 and this project's pinned 1.0.2 do not include them. `src/openai-decisions.ts` provides compatibility through the same native classifier contract; it skips registration entirely when the host provides Decisions. Remove the shim once the minimum supported host ships the adapter.
+Pi 1.1.0, now pinned for development, ships `packages/ai/src/api/openai-decisions.ts` and the `openai` classifier registration. `src/openai-decisions.ts` provides compatibility through the same native classifier contract; it skips registration entirely when the host provides Decisions. Remove the shim once the minimum supported host ships the adapter.
 
 - OpenAI chat transport, catalog, and native credential resolution are retained. Only the missing classifier operation is added. OAuth discovery excludes Decisions; API-key access is required, with no Codex credential substitution or chat fallback.
 - Native codemode and Fabric call `modelRegistry.classify`; no separate decision tool protocol is required. Native requests support optional inline `images`. The bounded `openai_decide` wrapper remains JSON-state-only and opt-in.

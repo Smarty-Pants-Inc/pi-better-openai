@@ -21,7 +21,7 @@ try {
     SettingsManager,
     VERSION,
   } = await import("@earendil-works/pi-coding-agent");
-  assert.equal(VERSION, "1.0.2", "test the actual pinned Pi host, not a stale override");
+  assert.equal(VERSION, "1.1.0", "test the actual pinned Pi host, not a stale override");
   const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   for (const name of [
     "@earendil-works/pi-ai",
