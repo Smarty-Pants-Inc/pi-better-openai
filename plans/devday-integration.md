@@ -10,17 +10,13 @@ Research checkpoint: September 29, 2026 (UTC). Announcements and account entitle
 - `openai_decide`: an opt-in bridge to Pi's classifier API. Explicit model selection, bounded typed input/output, cancellation/deadlines, usage reporting, and no chat/provider fallback.
 - No autonomous actions, model routing, approval bypasses, or inference-driven polling. Classification is an advisory primitive; application code owns policy and execution.
 
-## Native OpenAI Decisions: blocked on a verifiable contract
+## Native OpenAI Decisions: not shipped in this fork
 
-The announcement is reported in [DevDay coverage](https://www.axios.com/2026/09/29/openai-dev-day-2026-dots-space-sol). At the research checkpoint, the public docs index and OpenAI Node SDK did not expose a verifiable Decisions contract; Codex search hits concerned existing approval decisions. This is not proof that private or later access is unavailable.
+The [public Decisions guide](https://developers.openai.com/api/docs/guides/decisions) documents `POST /v1/decisions` and `gpt-6-luna`. Upstream 0.2.13 added a compatibility adapter (`src/openai-decisions.ts`); this fork does not ship it (smarty-dev#3155 review: the adapter forwarded the OpenAI API key to a caller-supplied `baseUrl`, and the fleet does not use OpenAI API keys for Decisions).
 
-The tool works with explicitly selected registered classifiers, including Jev. It does not pretend this is OpenAI's new service. Once OpenAI publishes its contract:
-
-1. Verify model IDs, schema, error/refusal behavior, modalities, endpoint, auth audience, rate limits, pricing, and data residency.
-2. Prefer a native Pi classifier adapter rather than duplicating credentials and transport here. Register classifier models, not chat models; the current tool can then select them.
-3. Preserve provider semantics. Do not equate arbitrary numeric scores or self-reported confidence with calibrated probabilities, or silently translate incompatible question types.
-4. Keep API-key and Codex subscription access separate until subscription authorization is documented. Do not infer OAuth compatibility from a product announcement.
-5. Add fixture tests and an opt-in live probe before claiming support. No default model ID is guessed today.
+- This extension registers no OpenAI classifier and does not touch OpenAI chat transport, catalog, or credentials.
+- `openai_decide` works with explicitly selected host-registered classifiers (for example Jev). Every request is confirmed per call with a payload preview, or refused without a UI unless `decisions.allowWithoutConfirmation` is set.
+- Re-adding OpenAI Decisions requires binding credentials to the trusted catalog endpoint and a signed-in real-host proof.
 
 ### Evaluation checklist
 
