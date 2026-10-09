@@ -264,7 +264,7 @@ export async function evaluateDecision(
     const model = ctx.modelRegistry.getModelOfType("classifier", key.provider, key.id);
     requireDecision(
       model,
-      "The configured native classifier is unavailable. No OpenAI endpoint or chat fallback is assumed; inspect /openai-decisions models.",
+      "The configured native classifier is unavailable. Inspect /openai-decisions models; no chat fallback is used.",
     );
     const request = validateDecisionRequest(input);
     requireDecision(!controller.signal.aborted, "Decision request aborted.");
@@ -279,7 +279,7 @@ export async function evaluateDecision(
     });
     timer = setTimeout(abort, cfg.decisions.timeoutMs);
     result = await Promise.race([
-      ctx.modelRegistry.classify(model, request, { signal: controller.signal }),
+      ctx.modelRegistry.classify(model, request, { signal: controller.signal, maxRetries: 0 }),
       cancelled,
     ]);
     requireDecision(
@@ -360,7 +360,7 @@ export function registerOpenAIDecisions(
           models.length
             ? models.map((m) => `${m.provider}/${m.id}`).join("\n") +
                 "\nCatalog entries do not guarantee credentials or entitlement."
-            : "No native classifiers registered. No OpenAI Decisions endpoint is assumed.",
+            : "No native classifiers registered.",
           "info",
         );
       } else if (arg.startsWith("use ")) {
@@ -381,7 +381,7 @@ export function registerOpenAIDecisions(
       } else if (!arg) {
         const cfg = getConfig(ctx).decisions;
         ctx.ui.notify(
-          `Decisions: ${cfg.enabled ? "enabled" : "disabled"}; model: ${cfg.model || "not selected"}; timeout: ${cfg.timeoutMs}ms.\n/openai-decisions models | use provider/model | off\nOpenAI native Decisions requires a published classifier adapter in Pi; no endpoint is guessed.`,
+          `Decisions: ${cfg.enabled ? "enabled" : "disabled"}; model: ${cfg.model || "not selected"}; timeout: ${cfg.timeoutMs}ms.\n/openai-decisions models | use provider/model | off\nOpenAI Decisions: openai/gpt-6-luna requires an OpenAI API key (not ChatGPT/Codex OAuth).`,
           "info",
         );
       } else {
@@ -393,7 +393,7 @@ export function registerOpenAIDecisions(
     name: OPENAI_DECIDE_TOOL,
     label: "Typed decision",
     description:
-      "Answer bounded choice, bool, or score questions using the user's explicitly configured native classifier. Disabled until opt-in. Supports Pi classifier providers (including Jev); OpenAI requires a native adapter. Never uses a chat fallback or executes decisions.",
+      "Answer bounded choice, bool, or score questions using the user's explicitly configured native classifier. Disabled until opt-in. Supports OpenAI Decisions (openai/gpt-6-luna, API key only) and other Pi classifiers including Jev. Never uses a chat fallback or executes decisions.",
     parameters: DECISION_PARAMETERS,
     outputSchema: DECISION_OUTPUT,
     promptGuidelines: [

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.13
+
+- Add a native OpenAI Decisions compatibility classifier for hosts without upstream support, preserving OpenAI chat/auth and deferring to the host adapter when available.
+- Support typed predicates, choices, scores, inline images, cancellation, hooks, HTTP retries, and input-only usage accounting through native codemode and pi-fabric.
+- Keep the bounded decision tool opt-in, explicitly disable its provider retries, and verify real-host codemode with offline HTTP fixtures.
+- Upgrade sharp and pin patched source-map-js/tinypool dependencies to resolve high/critical security advisories.
+
 ## 0.2.12
 
 - Validate against Pi 1.0.2, where `openai` supports ChatGPT subscription OAuth and `openai-codex` is labeled legacy; preserve the native OpenAI provider and transport.

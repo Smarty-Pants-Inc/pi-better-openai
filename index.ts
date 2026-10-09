@@ -18,6 +18,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { Usage } from "@earendil-works/pi-ai";
 import { registerOpenAICodexModels } from "./src/codex-models.ts";
+import { registerOpenAIDecisionsProvider } from "./src/openai-decisions.ts";
 import { CONFIG_BASENAME, STATUS_KEY } from "./src/identity.ts";
 import {
   CHATGPT_PROVIDER_IDS,
@@ -275,6 +276,7 @@ function textPanel(title: string, lines: string[], done: () => void) {
 
 export default function betterOpenAI(pi: ExtensionAPI): void {
   registerOpenAICodexModels(pi);
+  registerOpenAIDecisionsProvider(pi);
 
   const fastController = new FastController(SERVICE_TIER);
   let cachedConfig: ResolvedConfig | undefined;

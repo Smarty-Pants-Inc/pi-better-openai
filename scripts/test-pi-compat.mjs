@@ -14,13 +14,14 @@ let session;
 try {
   const {
     createAgentSession,
+    createCodemodeExtension,
     DefaultResourceLoader,
     ModelRuntime,
     SessionManager,
     SettingsManager,
     VERSION,
   } = await import("@earendil-works/pi-coding-agent");
-  assert.equal(VERSION, "1.0.2", "test the actual pinned Pi host, not a stale override");
+  assert.equal(VERSION, "1.1.0", "test the actual pinned Pi host, not a stale override");
   const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   for (const name of [
     "@earendil-works/pi-ai",
@@ -89,10 +90,12 @@ try {
   await session.bindExtensions({});
   assert.equal(modelRuntime.getProvider("openai")?.auth?.oauth?.isSubscription, true);
   assert.match(modelRuntime.getProvider("openai-codex")?.name ?? "", /legacy/i);
-  assert.equal(
-    modelRuntime.getRegisteredProviderIds().includes("openai"),
-    false,
-    "keep native OpenAI auth and transport",
+  const decisionsModel = modelRuntime.getModelOfType("classifier", "openai", "gpt-6-luna");
+  assert.equal(decisionsModel?.api, "openai-decisions");
+  assert.deepEqual(
+    await modelRuntime.getAvailableOfType("classifier", "openai"),
+    [],
+    "Decisions is not subscription access",
   );
   assert.equal(modelRuntime.isUsingOAuth("openai"), true);
   assert.equal(modelRuntime.isUsingSubscription("openai"), true);
@@ -118,6 +121,64 @@ try {
     false,
     "API key overrides must remain API-only",
   );
+  assert.ok(
+    (await modelRuntime.getAvailableOfType("classifier", "openai")).some(
+      (model) => model.id === "gpt-6-luna",
+    ),
+  );
+  const decisionRequests = [];
+  globalThis.fetch = async (url, init) => {
+    assert.equal(String(url), "https://api.openai.com/v1/decisions");
+    assert.equal(new Headers(init.headers).get("authorization"), "Bearer synthetic-api-key");
+    decisionRequests.push(JSON.parse(init.body));
+    return Response.json({
+      answers: [{ name: "approved", type: "predicate", probability: 0.9 }],
+      usage: { input_tokens: 20, output_tokens: 0 },
+    });
+  };
+  let codemode;
+  createCodemodeExtension()({
+    registerTool: (tool) => {
+      codemode = tool;
+    },
+    appendEntry() {},
+    getSettings: () => ({}),
+    getAllTools: () => [],
+  });
+  for (const images of [[], [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]]) {
+    const input = {
+      state: { approved: true },
+      questions: {
+        approved: {
+          type: "bool",
+          instructions: "Is it approved?",
+          criteria: { true: "Approved", false: "Not approved" },
+        },
+      },
+      images,
+    };
+    const result = await codemode.execute(
+      "decisions-codemode-probe",
+      {
+        code: `const available = await models.getAvailableOfType("classifier", "openai"); const model = available.find(m => m.id === "gpt-6-luna"); if (!model) throw new Error("missing classifier"); return await models.classify(model, ${JSON.stringify(input)});`,
+      },
+      undefined,
+      undefined,
+      session.extensionRunner.createToolContext("decisions-codemode-probe", undefined),
+    );
+    const text = result.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+    assert.match(text, /Script completed/);
+    assert.match(text, /"probability":\s*0\.9/);
+    assert.equal(result.usage.input, 20);
+    assert.ok(Math.abs(result.usage.cost.total - 0.000002) < 1e-15);
+  }
+  assert.equal(decisionRequests.length, 2);
+  assert.equal(typeof decisionRequests[0].input, "string");
+  assert.equal(decisionRequests[1].input[0].content[1].image_url, "data:image/png;base64,aW1hZ2U=");
+  globalThis.fetch = async () => new Response("", { status: 503 });
   await modelRuntime.removeRuntimeApiKey("openai");
   assert.equal(modelRuntime.isUsingOAuth("openai"), true);
   await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
@@ -137,7 +198,7 @@ try {
     }
   }
   console.log(
-    `${manifest.name}: Pi ${VERSION} warning-free manifest load; ${loaded.extensions.length} extensions, ${names.size} tools registered; OpenAI subscription/API-key auth isolation verified`,
+    `${manifest.name}: Pi ${VERSION} warning-free manifest load; ${loaded.extensions.length} extensions, ${names.size} tools registered; OpenAI auth isolation and native codemode text/image Decisions verified (mock HTTP)`,
   );
 } finally {
   if (session) {

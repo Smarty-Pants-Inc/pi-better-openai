@@ -109,6 +109,7 @@ describe("native typed decisions", () => {
     const response = await evaluateDecision(ctx, cfg, input);
     expect(classify).toHaveBeenCalledExactlyOnceWith(model, input, {
       signal: expect.any(AbortSignal),
+      maxRetries: 0,
     });
     expect(response.structuredContent).toEqual({
       status: "ok",

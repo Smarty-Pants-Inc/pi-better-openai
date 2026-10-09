@@ -121,13 +121,13 @@ test("real Pi hides disabled tools and guidance, and settings restore and withdr
     const current = session;
     const errors: unknown[] = [];
     current.extensionRunner!.onError((error) => errors.push(error));
-    const assertExposure = (name: string, enabled: boolean) => {
+    const assertExposure = (name: string, enabled: boolean, declared = enabled) => {
       const definition = current.getToolDefinition(name)!;
       expect(definition.exposure).toBe(enabled ? "direct" : "hidden");
       expect(current.getActiveToolNames().includes(name)).toBe(enabled);
       expect(current.getCallableToolNames().includes(name)).toBe(enabled);
       for (const guideline of definition.promptGuidelines ?? []) {
-        expect(current.systemPrompt.includes(guideline)).toBe(enabled);
+        expect(current.systemPrompt.includes(guideline)).toBe(declared);
       }
     };
     // No config has been read in a session yet: factory registration must be safe.
@@ -195,20 +195,31 @@ test("real Pi hides disabled tools and guidance, and settings restore and withdr
     expect(current.getActiveToolNames()).not.toContain(features.image);
     expect(current.getActiveToolNames()).toContain(features.websearch);
 
-    // Proxy-style declaration hiding is not disabling: guidance follows active tools.
+    // Declaration hiding keeps tools callable, but Pi 1.1 omits their prompt rules.
+    // An orchestrator owns redisclosing those rules via getPromptGuidelines.
+    let proxyGuidelines: string[] = [];
     api!.registerTool({
       name: "proxy_probe",
       label: "Proxy probe",
       description: "Offline loadout probe",
       parameters: Type.Object({}),
-      prepareLoadout: (loadout) => ({
-        hiddenDeclarations: loadout.registered
-          .map((tool) => tool.name)
-          .filter((name) => name !== "proxy_probe"),
-      }),
+      prepareLoadout: (loadout) => {
+        proxyGuidelines = loadout.callable.flatMap((tool) =>
+          loadout.getPromptGuidelines(tool.name),
+        );
+        return {
+          descriptions: { proxy_probe: `Offline loadout probe\n${proxyGuidelines.join("\n")}` },
+          hiddenDeclarations: loadout.registered
+            .map((tool) => tool.name)
+            .filter((name) => name !== "proxy_probe"),
+        };
+      },
       execute: async () => ({ content: [], details: undefined }),
     });
-    assertExposure(features.websearch, true);
+    assertExposure(features.websearch, true, false);
+    for (const rule of current.getToolDefinition(features.websearch)!.promptGuidelines ?? []) {
+      expect(proxyGuidelines).toContain(rule);
+    }
     writeConfig(configPath, {
       ...baseConfig,
       image: { enabled: false },
