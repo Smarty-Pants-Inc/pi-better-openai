@@ -192,6 +192,11 @@ describe("config helpers", () => {
         expect(_test.resolveConfig(cwd).decisions).toMatchObject({ model: "", enabled: false });
         writeConfig(paths.project, { decisions: null });
         expect(_test.resolveConfig(cwd).decisions).toMatchObject({ model: "", enabled: false });
+        expect(_test.resolveConfig(cwd).decisions.allowWithoutConfirmation).toBe(false);
+        writeConfig(paths.project, { decisions: { allowWithoutConfirmation: "true" } });
+        expect(_test.resolveConfig(cwd).decisions.allowWithoutConfirmation).toBe(false);
+        writeConfig(paths.project, { decisions: { allowWithoutConfirmation: true } });
+        expect(_test.resolveConfig(cwd).decisions.allowWithoutConfirmation).toBe(true);
       }),
     );
   });

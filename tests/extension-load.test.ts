@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { expect, test, vi } from "vitest";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 test("loads through pi's real extension loader and registers the native Codex provider", async () => {
   const scratch = mkdtempSync(join(tmpdir(), "pi-better-openai-load-"));
@@ -26,17 +27,21 @@ test("loads through pi's real extension loader and registers the native Codex pr
     const loaded = loader.getExtensions();
     expect(loaded.errors).toEqual([]);
     expect(loaded.extensions).toHaveLength(1);
-    expect([...loaded.extensions[0]!.tools.keys()]).toEqual([
-      "openai_image",
-      "openai_websearch",
-      "openai_decide",
-    ]);
+    expect([...loaded.extensions[0]!.tools.keys()]).toEqual(["openai_image", "openai_websearch"]);
     expect([...loaded.extensions[0]!.commands.keys()]).toEqual(
-      expect.arrayContaining(["fast", "openai-tier", "openai-decisions"]),
+      expect.arrayContaining(["fast", "openai-tier"]),
     );
+    expect(loaded.extensions[0]!.tools.has("openai_decide")).toBe(false);
+    expect(loaded.extensions[0]!.commands.has("openai-decisions")).toBe(false);
     expect(
       loaded.runtime.pendingNativeProviderRegistrations.map(({ provider }) => provider.id),
-    ).toContain("openai-codex");
+    ).toEqual(["openai-codex"]);
+    const provider = builtinProviders().find((provider) => provider.id === "openai")!;
+    expect(provider.getAllModels?.()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "classifier", id: "gpt-6-luna", api: "openai-decisions" }),
+      ]),
+    );
   } finally {
     loader.getExtensions().runtime.invalidate("Loader regression test complete");
     vi.unstubAllEnvs();

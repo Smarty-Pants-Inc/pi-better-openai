@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (Smarty fork)
+
+- Confirm every `openai_decide` request with a payload preview (destination, size, truncated JSON state) before it leaves the machine; refuse without a UI unless `decisions.allowWithoutConfirmation` is true.
+- Do not ship upstream's native OpenAI Decisions compatibility adapter (smarty-dev#3155).
+- List, accept, and call only classifiers that pass the host's credential availability check; fail closed on hosts without the classifier API.
+
+## 0.2.13
+
+- Add a native OpenAI Decisions compatibility classifier for hosts without upstream support, preserving OpenAI chat/auth and deferring to the host adapter when available.
+- Support typed predicates, choices, scores, inline images, cancellation, hooks, HTTP retries, and input-only usage accounting through native codemode and pi-fabric.
+- Keep the bounded decision tool opt-in, explicitly disable its provider retries, and verify real-host codemode with offline HTTP fixtures.
+- Upgrade sharp and pin patched source-map-js/tinypool dependencies to resolve high/critical security advisories.
+
 ## 0.2.12
 
 - Validate against Pi 1.0.2, where `openai` supports ChatGPT subscription OAuth and `openai-codex` is labeled legacy; preserve the native OpenAI provider and transport.
