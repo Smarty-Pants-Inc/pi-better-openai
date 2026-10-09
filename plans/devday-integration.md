@@ -7,7 +7,7 @@ Research checkpoint: September 29, 2026 (UTC). Announcements and account entitle
 - GPT-6.1 Sol fallback metadata, with native Pi transport/auth and live catalog precedence preserved.
 - Fast-mode defaults for GPT-6 Astra, 6.1 Sol, Sol, and Luna on OpenAI/Codex.
 - Explicit Standard/Fast/Ultrafast selection, legacy state migration, model/endpoint capability gates, persistence, diagnostics, cost disclosure, and footer labels.
-- `openai_decide`: **disabled in this fork** (smarty-dev#3155). The tool, `/openai-decisions` and its settings section are not registered, because Pi's confirmation UI cannot yet show a complete request safely. The module (`src/decisions.ts`: typed bridge to Pi's classifier API, full-request confirmation, credential-availability filter) stays in the repository, unreferenced and excluded from the published package.
+- `openai_decide`: **disabled in this fork** (smarty-dev#3155). The tool, `/openai-decisions` and its settings section are not registered, because Pi's confirmation UI cannot yet show a complete request safely. The module (`src/decisions.ts`: typed bridge to Pi's classifier API, full-request confirmation in interactive sessions, which the headless opt-in `decisions.allowWithoutConfirmation: true` bypasses, and a credential-availability filter) stays in the repository, unreferenced and excluded from the published package.
 - No autonomous actions, model routing, approval bypasses, or inference-driven polling. Classification is an advisory primitive; application code owns policy and execution.
 
 ## Native OpenAI Decisions: not shipped in this fork

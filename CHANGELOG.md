@@ -4,7 +4,7 @@
 
 - **Typed decisions are disabled in this fork** (smarty-dev#3155): `openai_decide`, `/openai-decisions` and the Typed decisions settings section are not registered, because Pi's confirmation UI cannot yet show a complete request safely. Legacy `decisions.*` settings still load and have no effect.
 - Do not ship upstream's native OpenAI Decisions compatibility adapter (smarty-dev#3155).
-- The unregistered decisions module (`src/decisions.ts`) stays in the repository but is **not published** in the package (`files` excludes it), so no consumer can import it and re-register the tool. It keeps a per-call confirmation that previews the complete request or refuses it, and a credential-availability filter, for when the feature returns.
+- The unregistered decisions module (`src/decisions.ts`) stays in the repository but is **not published** in the package (`files` excludes it), so no consumer can import it and re-register the tool. It keeps a per-call confirmation that previews the complete request or refuses it (interactive sessions only; the headless opt-in `decisions.allowWithoutConfirmation: true` skips it), and a credential-availability filter, for when the feature returns.
 
 ## 0.2.13
 
