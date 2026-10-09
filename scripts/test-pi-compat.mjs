@@ -1,9 +1,18 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
+const runtime = process.env.PI_COMPAT_RUNTIME;
+if (process.argv.includes("--fleet"))
+  assert.ok(runtime, "test:pi:fleet requires PI_COMPAT_RUNTIME pointing to fleet node_modules");
+const host = runtime
+  ? pathToFileURL(
+      createRequire(import.meta.url).resolve(resolve(runtime, "@earendil-works/pi-coding-agent")),
+    ).href
+  : "@earendil-works/pi-coding-agent";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const home = await mkdtemp(join(tmpdir(), "pi-extension-compat-"));
 const previousHome = process.env.PI_CODING_AGENT_DIR;
@@ -19,8 +28,9 @@ try {
     SessionManager,
     SettingsManager,
     VERSION,
-  } = await import("@earendil-works/pi-coding-agent");
-  assert.equal(VERSION, "1.1.0", "test the actual pinned Pi host, not a stale override");
+  } = await import(host);
+  if (!runtime)
+    assert.equal(VERSION, "1.1.0", "test the actual pinned Pi host, not a stale override");
   const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   for (const name of [
     "@earendil-works/pi-ai",
@@ -69,6 +79,12 @@ try {
   assert.deepEqual(loaded.errors, []);
   assert.deepEqual(loaded.warnings ?? [], []);
   assert.ok(loaded.extensions.length > 0, "manifest entrypoints must load");
+  for (const name of ["openai-websearch", "openai-image"]) {
+    assert.ok(
+      loaded.extensions.some((extension) => extension.commands.has(name)),
+      `${name}: command must register`,
+    );
+  }
   for (const extension of loaded.extensions) {
     assert.equal(extension.tools.has("openai_decide"), false, "Decisions tool must not register");
     assert.equal(
@@ -108,45 +124,48 @@ try {
   const errors = [];
   session.extensionRunner.onError((error) => errors.push(error));
   await session.bindExtensions({});
-  assert.equal(modelRuntime.getProvider("openai")?.auth?.oauth?.isSubscription, true);
-  assert.match(modelRuntime.getProvider("openai-codex")?.name ?? "", /legacy/i);
   assert.equal(
     modelRuntime.getRegisteredProviderIds().includes("openai"),
     false,
     "keep native OpenAI auth and transport (no Decisions adapter is shipped)",
   );
-  // The host hides its OpenAI Decisions classifier from ChatGPT OAuth.
-  assert.deepEqual(
-    await modelRuntime.getAvailableOfType("classifier", "openai"),
-    [],
-    "OpenAI OAuth must not make an OpenAI classifier selectable for decisions",
-  );
-  assert.equal(modelRuntime.isUsingOAuth("openai"), true);
-  assert.equal(modelRuntime.isUsingSubscription("openai"), true);
-  assert.equal(
-    (await modelRuntime.getAuth("openai"))?.auth.apiKey,
-    "synthetic-openai-subscription-token",
-  );
-  assert.equal(
-    await modelRuntime.getAuth("openai-codex"),
-    undefined,
-    "OpenAI OAuth is not Codex backend auth",
-  );
-  const openaiModel = modelRuntime.getModel("openai", "gpt-6-astra");
-  assert.equal(openaiModel?.api, "openai-responses");
-  assert.equal(openaiModel?.baseUrl, "https://api.openai.com/v1");
   assert.ok(
     modelRuntime.getModel("openai-codex", "gpt-6.1-sol"),
     "legacy fallback models remain registered",
   );
-  await modelRuntime.setRuntimeApiKey("openai", "synthetic-api-key");
-  assert.equal(
-    modelRuntime.isUsingOAuth("openai"),
-    false,
-    "API key overrides must remain API-only",
-  );
-  await modelRuntime.removeRuntimeApiKey("openai");
-  assert.equal(modelRuntime.isUsingOAuth("openai"), true);
+  // Direct-OpenAI subscription auth was added in upstream Pi 1.x, not fleet Pi 0.87.1.
+  if (!runtime) {
+    assert.equal(modelRuntime.getProvider("openai")?.auth?.oauth?.isSubscription, true);
+    assert.match(modelRuntime.getProvider("openai-codex")?.name ?? "", /legacy/i);
+    // The host hides its OpenAI Decisions classifier from ChatGPT OAuth.
+    assert.deepEqual(
+      await modelRuntime.getAvailableOfType("classifier", "openai"),
+      [],
+      "OpenAI OAuth must not make an OpenAI classifier selectable for decisions",
+    );
+    assert.equal(modelRuntime.isUsingOAuth("openai"), true);
+    assert.equal(modelRuntime.isUsingSubscription("openai"), true);
+    assert.equal(
+      (await modelRuntime.getAuth("openai"))?.auth.apiKey,
+      "synthetic-openai-subscription-token",
+    );
+    assert.equal(
+      await modelRuntime.getAuth("openai-codex"),
+      undefined,
+      "OpenAI OAuth is not Codex backend auth",
+    );
+    const openaiModel = modelRuntime.getModel("openai", "gpt-6-astra");
+    assert.equal(openaiModel?.api, "openai-responses");
+    assert.equal(openaiModel?.baseUrl, "https://api.openai.com/v1");
+    await modelRuntime.setRuntimeApiKey("openai", "synthetic-api-key");
+    assert.equal(
+      modelRuntime.isUsingOAuth("openai"),
+      false,
+      "API key overrides must remain API-only",
+    );
+    await modelRuntime.removeRuntimeApiKey("openai");
+    assert.equal(modelRuntime.isUsingOAuth("openai"), true);
+  }
   await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
   assert.deepEqual(errors, [], "real session startup and shutdown must succeed");
   const names = new Set();
@@ -170,7 +189,7 @@ try {
     "Decisions tool must not be installed in the real session",
   );
   console.log(
-    `${manifest.name}: Pi ${VERSION} warning-free manifest load; ${loaded.extensions.length} extensions, ${names.size} tools registered; Decisions tool/command absent; OpenAI subscription/API-key auth isolation verified`,
+    `${manifest.name}: Pi ${VERSION}${runtime ? ` (${resolve(runtime)})` : " (pinned)"} warning-free manifest load; ${loaded.extensions.length} extensions, ${names.size} tools registered; openai-websearch/openai-image commands registered; legacy Decisions config ignored, tool/command absent${runtime ? "" : "; OpenAI subscription/API-key auth isolation verified"}`,
   );
 } finally {
   if (session) {

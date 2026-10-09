@@ -53,7 +53,8 @@
     "lint:fix": "oxlint --fix index.ts src/*.ts src/*/*.ts tests/*.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "test:pi": "node scripts/test-pi-compat.mjs"
+    "test:pi": "node scripts/test-pi-compat.mjs",
+    "test:pi:fleet": "node scripts/test-pi-compat.mjs --fleet"
   },
   "dependencies": {
     "sharp": "0.35.5"

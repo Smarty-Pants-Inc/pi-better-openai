@@ -6,6 +6,8 @@ A pi extension for OpenAI subscription workflows: fast mode, usage visibility, f
 
 Requires Node.js 22.19.0 or newer.
 
+Compatibility: `bun run test:pi` checks pinned Pi 1.1.0; `PI_COMPAT_RUNTIME=/path/to/node_modules bun run test:pi:fleet` checks the installed Pi packages on fleet hosts and in the canary gate (not hosted CI, which has no reproducible fleet-runtime acquisition).
+
 Install from GitHub:
 
 ```bash
