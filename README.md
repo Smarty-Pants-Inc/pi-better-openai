@@ -34,7 +34,7 @@ Pi labels `openai-codex` **legacy**, but this extension's usage polling, banked 
 
 - GPT-6.1 Sol, GPT-6 Astra, and Daybreak Blue/Red model fallbacks for the built-in `openai-codex` provider.
 - Standard, Fast, and capability-gated Ultrafast service tiers via `/openai-tier` or `/openai-settings`; `/fast` remains a quick Fast toggle.
-- Native OpenAI Decisions (`openai/gpt-6-luna`) through Pi's classifier API, codemode, and pi-fabric; optional bounded `openai_decide` tool also supports Jev.
+- Opt-in typed decisions through `openai_decide`, using an explicitly selected Pi classifier provider (including Jev), with per-call confirmation of the outgoing payload.
 - OpenAI subscription usage display via `/openai-usage` and the footer.
 - Interactive settings picker via `/openai-settings`.
 - Footer customization for model, thinking, fast mode, usage, and token/cost context.
@@ -150,46 +150,16 @@ The footer shows `fast` or `ultrafast` only when supported by the current model.
 
 ## Typed decisions
 
-OpenAI's [Decisions API](https://developers.openai.com/api/docs/guides/decisions) is available as the native classifier `openai/gpt-6-luna`, **not a chat-completion fallback**. Pi 1.1.0 ships the adapter, including native codemode image classification. This extension supplies a compatibility implementation only when the host lacks one; a built-in Decisions adapter always wins. Native OpenAI chat models, authentication, and transport are preserved.
-
-Use an **OpenAI API key** via `/login openai` or `OPENAI_API_KEY`. ChatGPT/Codex OAuth does not grant Decisions access. If `/login openai` stores OAuth, it takes precedence over the environment key: select the API-key login instead. No credentials are copied between providers. Catalog presence does not guarantee account entitlement.
-
-The optional `openai_decide` tool is disabled by default and never chooses a provider automatically. To enable it:
+The `openai_decide` tool returns typed judgments through Pi's classifier API, **not chat completions**. It is disabled by default and never chooses a provider automatically. To use an existing Jev classifier explicitly:
 
 ```text
 /openai-decisions models
-/openai-decisions use openai/gpt-6-luna
+/openai-decisions use typesafe/jev-latest
 ```
 
-Jev also works: select `typesafe/jev-latest` and configure `TYPESAFE_API_KEY` through Pi. The model list shows registered classifiers, not guaranteed credentials or entitlement. `/openai-decisions use` saves the selected model and enables decisions in the active project/global config; `/openai-decisions off` disables requests. These settings are independent of service-tier persistence. Provider-qualified IDs containing further slashes, such as `openrouter/typesafe/jev-1.13`, are supported when registered by the host. Prefer pinned versions for stable evaluations.
+Configure that provider's credentials through Pi (for example, `TYPESAFE_API_KEY` for TypeSafe). The model list shows registered classifiers, not guaranteed credentials or entitlement. `/openai-decisions use` saves the selected model and enables decisions in the active project/global config; `/openai-decisions off` disables requests. These settings are independent of service-tier persistence. Provider-qualified IDs containing further slashes, such as `openrouter/typesafe/jev-1.13`, are supported when registered by the host. Prefer pinned versions for stable evaluations.
 
-### Native codemode and pi-fabric
-
-The same classifier is available through `models` in Pi's codemode and pi-fabric's `fabric_exec` (`tools.models` is a Fabric alias). These are direct native-model calls: they do **not** depend on `decisions.enabled` or use the optional tool's size/deadline limits. Disabling `openai_decide` does not disable the classifier catalog or direct model calls. Enable Pi codemode with `"defaultTools": ["+codemode"]`; Fabric users can use their existing execution tool.
-
-```js
-const available = await models.getAvailableOfType("classifier", "openai");
-const model = available.find((m) => m.id === "gpt-6-luna");
-if (!model) return "Configure an OpenAI API key with Decisions access.";
-const result = await models.classify(model, {
-  state: { message: "The deployment worked." },
-  questions: {
-    approved: {
-      type: "bool",
-      instructions: "Does the message approve the result?",
-      criteria: { true: "Approval", false: "No approval" },
-    },
-  },
-});
-if (result.stopReason !== "stop") return result.errorMessage;
-return result.answers;
-```
-
-Native requests also accept `images: [{ type: "image", data: "<base64>", mimeType: "image/png" }]` beside `state` and `questions` (at most 128). The adapter performs no file reads or remote-image fetches; supply inline PNG/JPEG/GIF/WebP data. Older Fabric builds must support `NativeClassifierContext.images`; otherwise use text or upgrade Fabric. The bounded `openai_decide` wrapper remains JSON-state-only.
-
-Pi maps `bool` to OpenAI `predicate`, labeled `choice` criteria to options, and ordered `score` criteria to levels. Scores are expected zero-based level indices, not probabilities. Refusals fail with `stopReason: "error"`; billed usage is retained. Native calls follow provider HTTP retries (default two, never retrying 504); the optional tool explicitly disables retries and applies its own deadline.
-
-Decisions pricing starts at **$0.10 per million input tokens**, with no output/cache charges. Catalog long-context pricing doubles input above 272K tokens; regional premiums and actual billing may differ. See the [integration status](plans/devday-integration.md).
+**Native OpenAI Decisions:** the native OpenAI Decisions adapter from upstream 0.2.13 is not shipped in this fork; tracked in smarty-dev#3155. This extension registers no OpenAI classifier and sends no OpenAI API key anywhere. A classifier registered by the Pi host itself is only used if you select it explicitly, and every `openai_decide` request still requires the per-call confirmation below.
 
 ### Optional bounded tool
 
@@ -210,7 +180,7 @@ Example tool input:
 
 - `state`: JSON object; send only the necessary context, never credentials or the entire session.
 - **Per-call confirmation.** The model chooses `state`, so every `openai_decide` request is confirmed before anything leaves the machine. Interactive sessions show a dialog with the destination (provider/model and endpoint host), the total request size, the question names, and a preview of the exact JSON state (first 2,000 characters). Declining fails the tool with "declined by user" and sends nothing. Without a UI (print/JSON/RPC mode) requests are refused unless `decisions.allowWithoutConfirmation` is `true` (default `false`); only set it for unattended runs whose inputs you trust. This applies to every configured classifier.
-- `questions`: 1–32 named questions. `choice` uses 2–64 labeled criteria; `bool` uses `true`/`false` criteria; `score` uses 2–64 ordered criteria. Pi maps boolean questions to OpenAI's `predicate` or Jev's `noul` representation.
+- `questions`: 1–32 named questions. `choice` uses 2–64 labeled criteria; `bool` uses `true`/`false` criteria; `score` uses 2–64 ordered criteria. Pi maps boolean questions to the provider's representation (for example, Jev's `noul`).
 - Total input is capped at 64 KiB. `decisions.timeoutMs` defaults to 10000 and is clamped to 1000–60000. Cancellation/deadlines abort the provider request; there are no automatic retries. A timed-out upstream request may still incur charges.
 - Results have `status: "ok"`, provider/model provenance, and typed `answers`; errors have `status: "error"` and mark the tool failed. Structured output is available to programmatic callers. Provider error text is withheld to prevent credential/state leakage.
 - Probabilities and confidence remain uncertain judgments; scores retain their provider-specific scale. No claim of cross-provider calibration is made. Decisions never authorize tools, execute commands, change the active model, or start background polling.
@@ -218,7 +188,7 @@ Example tool input:
 
 ## Codex model fallbacks
 
-These chat fallbacks remain scoped to the legacy provider. Native `openai` chat models and transport are not replaced or redirected to Codex; only the missing Decisions classifier is added on older hosts.
+These fallbacks remain scoped to the legacy provider. The native `openai` provider and its catalog are not replaced or redirected to Codex.
 
 The extension adds `gpt-6.1-sol`, `gpt-6-astra`, `gpt-daybreak-blue-latest`, and `gpt-daybreak-red-latest` to the built-in `openai-codex` provider without requiring local `models.json` entries. Existing built-in models remain available, and metadata from pi's live catalog takes precedence when pi publishes an official entry with the same ID.
 

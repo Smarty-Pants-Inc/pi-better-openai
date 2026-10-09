@@ -38,8 +38,7 @@
     "README.md",
     "CHANGELOG.md",
     "plans/devday-integration.md",
-    "LICENSE",
-    "THIRD_PARTY_NOTICES.md"
+    "LICENSE"
   ],
   "type": "module",
   "publishConfig": {

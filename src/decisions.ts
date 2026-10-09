@@ -430,7 +430,7 @@ export function registerOpenAIDecisions(
       } else if (!arg) {
         const cfg = getConfig(ctx).decisions;
         ctx.ui.notify(
-          `Decisions: ${cfg.enabled ? "enabled" : "disabled"}; model: ${cfg.model || "not selected"}; timeout: ${cfg.timeoutMs}ms.\n/openai-decisions models | use provider/model | off\nOpenAI Decisions: openai/gpt-6-luna requires an OpenAI API key (not ChatGPT/Codex OAuth).`,
+          `Decisions: ${cfg.enabled ? "enabled" : "disabled"}; model: ${cfg.model || "not selected"}; timeout: ${cfg.timeoutMs}ms.\n/openai-decisions models | use provider/model | off\nThis extension does not ship an OpenAI Decisions adapter; only host-registered classifiers are listed.`,
           "info",
         );
       } else {
@@ -442,7 +442,7 @@ export function registerOpenAIDecisions(
     name: OPENAI_DECIDE_TOOL,
     label: "Typed decision",
     description:
-      "Answer bounded choice, bool, or score questions using the user's explicitly configured native classifier. Disabled until opt-in. Supports OpenAI Decisions (openai/gpt-6-luna, API key only) and other Pi classifiers including Jev. Never uses a chat fallback or executes decisions.",
+      "Answer bounded choice, bool, or score questions using the user's explicitly configured native classifier. Disabled until opt-in. Supports Pi classifier providers registered by the host (including Jev). Never uses a chat fallback or executes decisions.",
     parameters: DECISION_PARAMETERS,
     outputSchema: DECISION_OUTPUT,
     promptGuidelines: [

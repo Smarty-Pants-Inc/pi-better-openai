@@ -10,17 +10,13 @@ Research checkpoint: September 29, 2026 (UTC). Announcements and account entitle
 - `openai_decide`: an opt-in bridge to Pi's classifier API. Explicit model selection, bounded typed input/output, cancellation/deadlines, usage reporting, and no chat/provider fallback.
 - No autonomous actions, model routing, approval bypasses, or inference-driven polling. Classification is an advisory primitive; application code owns policy and execution.
 
-## Native OpenAI Decisions: compatibility adapter available
+## Native OpenAI Decisions: not shipped in this fork
 
-The [public Decisions guide](https://developers.openai.com/api/docs/guides/decisions) now documents `POST /v1/decisions`, `gpt-6-luna`, predicates/choices/scores, inline image inputs, refusals, and input-only pricing. This supersedes the original research checkpoint above.
+The [public Decisions guide](https://developers.openai.com/api/docs/guides/decisions) documents `POST /v1/decisions` and `gpt-6-luna`. Upstream 0.2.13 added a compatibility adapter (`src/openai-decisions.ts`); this fork does not ship it (smarty-dev#3155 review: the adapter forwarded the OpenAI API key to a caller-supplied `baseUrl`, and the fleet does not use OpenAI API keys for Decisions).
 
-Pi 1.1.0, now pinned for development, ships `packages/ai/src/api/openai-decisions.ts` and the `openai` classifier registration. `src/openai-decisions.ts` provides compatibility through the same native classifier contract; it skips registration entirely when the host provides Decisions. Remove the shim once the minimum supported host ships the adapter.
-
-- OpenAI chat transport, catalog, and native credential resolution are retained. Only the missing classifier operation is added. OAuth discovery excludes Decisions; API-key access is required, with no Codex credential substitution or chat fallback.
-- Native codemode and Fabric call `modelRegistry.classify`; no separate decision tool protocol is required. Native requests support optional inline `images`. The bounded `openai_decide` wrapper remains JSON-state-only and opt-in.
-- Typed result mapping preserves predicates, choice distributions, zero-based expected scores, error/aborted stop reasons, and billed usage, including refusals. Provider hooks, header overrides, cancellation, HTTP retry budgets, and long-context costs are covered by offline fixtures.
-- `bun run test:pi` exercises real Pi loading, credential isolation, and codemode text/image requests with synthetic HTTP. Fabric's native-codemode tests cover the same context shape in QuickJS, Node, and Bun. No paid live request or account entitlement is implied by these tests.
-- The provider's default HTTP retry policy is independent of the optional wrapper, which sends `maxRetries: 0` and enforces its own deadline. Neither interface authorizes actions.
+- This extension registers no OpenAI classifier and does not touch OpenAI chat transport, catalog, or credentials.
+- `openai_decide` works with explicitly selected host-registered classifiers (for example Jev). Every request is confirmed per call with a payload preview, or refused without a UI unless `decisions.allowWithoutConfirmation` is set.
+- Re-adding OpenAI Decisions requires binding credentials to the trusted catalog endpoint and a signed-in real-host proof.
 
 ### Evaluation checklist
 

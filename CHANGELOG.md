@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (Smarty fork)
+
+- Confirm every `openai_decide` request with a payload preview (destination, size, truncated JSON state) before it leaves the machine; refuse without a UI unless `decisions.allowWithoutConfirmation` is true.
+- Do not ship upstream's native OpenAI Decisions compatibility adapter (smarty-dev#3155).
+
 ## 0.2.13
 
 - Add a native OpenAI Decisions compatibility classifier for hosts without upstream support, preserving OpenAI chat/auth and deferring to the host adapter when available.
