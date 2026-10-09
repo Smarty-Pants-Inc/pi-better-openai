@@ -314,12 +314,13 @@ const NON_PRINTABLE_ASCII = /[^\x20-\x7E\n]/g;
  * escapes, as JSON allows), so the preview is pure printable ASCII and still valid JSON that
  * parses back to the identical request.
  */
-export function toPrintableAscii(text: string): string {
-  return text.replace(
-    NON_PRINTABLE_ASCII,
-    (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
+export function toPrintableAscii(text: string, pattern: RegExp = NON_PRINTABLE_ASCII): string {
+  return text.replace(pattern, (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
+
+// Configured metadata (provider, model id, host) is one display line: escape "\n" too, so it
+// cannot split or spoof the dialog's layout lines.
+const NON_PRINTABLE_ASCII_LINE = /[^\x20-\x7E]/g;
 
 /**
  * Serializes the complete classifier request exactly as previewed. The object sent to the
@@ -361,6 +362,7 @@ export function buildDecisionConfirmation(
     message: [
       toPrintableAscii(
         `Destination: ${model.provider}/${model.id} (${endpointHost(model.baseUrl)})`,
+        NON_PRINTABLE_ASCII_LINE,
       ),
       `Total request size: ${size} bytes`,
       "Complete request to be sent (state and questions):",

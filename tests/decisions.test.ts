@@ -311,6 +311,16 @@ describe("native typed decisions", () => {
     expect(JSON.parse(preview)).toEqual(sneaky);
   });
 
+  test("destination metadata cannot inject confirmation lines", () => {
+    const spoof = { provider: "safe\nFAKE: yes", id: "m\r\nDestination: evil" };
+    const { message } = buildDecisionConfirmation(spoof, input);
+    const lines = message.split("\n");
+    expect(lines.filter((line) => line.startsWith("Destination: "))).toHaveLength(1);
+    expect(lines.some((line) => line.startsWith("FAKE: "))).toBe(false);
+    expect(message).toContain("Destination: safe\\u000aFAKE: yes/m\\u000d\\u000aDestination: evil");
+    expect(message).toMatch(/^[\x20-\x7E\n]*$/);
+  });
+
   test("the 16 KiB limit is measured on the escaped preview", () => {
     // Each "é" is 2 UTF-8 bytes raw but 6 bytes escaped, so this fits raw but not escaped.
     const accented = { ...input, state: { text: "é".repeat(4000) } };
