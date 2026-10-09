@@ -274,14 +274,50 @@ describe("native typed decisions", () => {
     expect(buildDecisionConfirmation(model, input).message).toContain("provider-defined endpoint");
   });
 
-  test("invisible characters are escaped in the preview and the sent object is parsed from it", () => {
-    const sneaky = { ...input, state: { note: "ok\u200bhidden\u202e\u2028x \u00e9" } };
+  test("the preview is pure printable ASCII; every other code point is escaped and parses back", () => {
+    const sneaky = {
+      ...input,
+      state: {
+        cgj: "a\u034fb",
+        vs16: "\u2764\ufe0f",
+        zwsp: "ok\u200bhidden",
+        rlo: "x\u202ey",
+        emoji: "\u{1f600}",
+        cafe: "café",
+        namaste: "नमस्ते",
+        controls: "\u0000\u001b\u007f\u0085\u2028\n\t",
+        lone: "\ud800",
+      },
+    };
     const preview = serializeDecisionPreview(sneaky);
-    expect(preview).toContain("ok\\u200bhidden\\u202e\\u2028x \u00e9");
-    expect(preview).not.toMatch(/[\u200b\u202e\u2028]/);
-    const { message, request } = buildDecisionConfirmation(model, sneaky);
+    for (const escaped of [
+      '"a\\u034fb"',
+      '"\\u2764\\ufe0f"',
+      '"ok\\u200bhidden"',
+      '"x\\u202ey"',
+      '"\\ud83d\\ude00"',
+      '"caf\\u00e9"',
+      '"\\u0928\\u092e\\u0938\\u094d\\u0924\\u0947"',
+      '"\\u0000\\u001b\\u007f\\u0085\\u2028\\n\\t"',
+      '"\\ud800"',
+    ])
+      expect(preview).toContain(escaped);
+    const unicodeModel = { provider: "prov\u202e", id: "m\u00e9" };
+    const { message, request } = buildDecisionConfirmation(unicodeModel, sneaky);
     expect(message).toContain(preview);
+    expect(message).toContain("Destination: prov\\u202e/m\\u00e9");
+    expect(message).toMatch(/^[\x20-\x7E\n]*$/);
     expect(request).toEqual(sneaky);
+    expect(JSON.parse(preview)).toEqual(sneaky);
+  });
+
+  test("the 16 KiB limit is measured on the escaped preview", () => {
+    // Each "é" is 2 UTF-8 bytes raw but 6 bytes escaped, so this fits raw but not escaped.
+    const accented = { ...input, state: { text: "é".repeat(4000) } };
+    expect(Buffer.byteLength(JSON.stringify(accented, null, 2))).toBeLessThan(
+      DECISION_PREVIEW_MAX_BYTES,
+    );
+    expect(() => buildDecisionConfirmation(model, accented)).toThrow(/too large to preview/);
   });
 
   test("the object previewed in the dialog is deep-equal to the object sent", async () => {

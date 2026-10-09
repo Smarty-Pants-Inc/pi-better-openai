@@ -298,22 +298,26 @@ export function decisionModelPickerOverride(
   };
 }
 
-/** Largest complete request (as displayed) that can be confirmed; larger requests are refused. */
+/**
+ * Largest complete request that can be confirmed, measured on the escaped (pure ASCII)
+ * preview as displayed; larger requests are refused.
+ */
 export const DECISION_PREVIEW_MAX_BYTES = 16 * 1024;
 
-// Characters that would be invisible or reorder text in a terminal dialog. They can only
-// occur inside JSON strings (structural whitespace is " " and "\n"), so escaping them keeps
-// the preview valid JSON that parses back to the identical request.
-const HIDDEN_CHARS = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\p{Zs}]/gu;
+// Every UTF-16 code unit outside printable ASCII (U+0020-U+007E), except the "\n" used for
+// pretty-print layout. JSON.stringify already escapes "\n" inside strings, so a raw "\n" is
+// always layout; everything else matched can only occur inside JSON strings.
+const NON_PRINTABLE_ASCII = /[^\x20-\x7E\n]/g;
 
-function escapeHidden(json: string): string {
-  return json.replace(HIDDEN_CHARS, (match) =>
-    match === " " || match === "\n"
-      ? match
-      : Array.from(
-          { length: match.length },
-          (_, i) => `\\u${match.charCodeAt(i).toString(16).padStart(4, "0")}`,
-        ).join(""),
+/**
+ * Escapes every matched code unit as `\uXXXX` (astral code points become two surrogate
+ * escapes, as JSON allows), so the preview is pure printable ASCII and still valid JSON that
+ * parses back to the identical request.
+ */
+export function toPrintableAscii(text: string): string {
+  return text.replace(
+    NON_PRINTABLE_ASCII,
+    (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
 }
 
@@ -322,7 +326,7 @@ function escapeHidden(json: string): string {
  * classifier must be parsed back from this text so no undisplayed bytes leave the machine.
  */
 export function serializeDecisionPreview(request: ClassifierContext): string {
-  return escapeHidden(JSON.stringify(request, null, 2));
+  return toPrintableAscii(JSON.stringify(request, null, 2));
 }
 
 function endpointHost(baseUrl: unknown): string {
@@ -355,7 +359,9 @@ export function buildDecisionConfirmation(
   return {
     title: "Send decision request?",
     message: [
-      `Destination: ${model.provider}/${model.id} (${endpointHost(model.baseUrl)})`,
+      toPrintableAscii(
+        `Destination: ${model.provider}/${model.id} (${endpointHost(model.baseUrl)})`,
+      ),
       `Total request size: ${size} bytes`,
       "Complete request to be sent (state and questions):",
       preview,
