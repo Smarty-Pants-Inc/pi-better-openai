@@ -35,6 +35,7 @@
   "files": [
     "index.ts",
     "src/",
+    "!src/decisions.ts",
     "README.md",
     "CHANGELOG.md",
     "plans/devday-integration.md",

@@ -7,7 +7,7 @@ Research checkpoint: September 29, 2026 (UTC). Announcements and account entitle
 - GPT-6.1 Sol fallback metadata, with native Pi transport/auth and live catalog precedence preserved.
 - Fast-mode defaults for GPT-6 Astra, 6.1 Sol, Sol, and Luna on OpenAI/Codex.
 - Explicit Standard/Fast/Ultrafast selection, legacy state migration, model/endpoint capability gates, persistence, diagnostics, cost disclosure, and footer labels.
-- `openai_decide`: an opt-in bridge to Pi's classifier API. Explicit model selection, bounded typed input/output, cancellation/deadlines, usage reporting, and no chat/provider fallback.
+- `openai_decide`: **disabled in this fork** (smarty-dev#3155). The tool, `/openai-decisions` and its settings section are not registered, because Pi's confirmation UI cannot yet show a complete request safely. The module (`src/decisions.ts`: typed bridge to Pi's classifier API, full-request confirmation in interactive sessions, which the headless opt-in `decisions.allowWithoutConfirmation: true` bypasses, and a credential-availability filter) stays in the repository, unreferenced and excluded from the published package.
 - No autonomous actions, model routing, approval bypasses, or inference-driven polling. Classification is an advisory primitive; application code owns policy and execution.
 
 ## Native OpenAI Decisions: not shipped in this fork
@@ -15,7 +15,7 @@ Research checkpoint: September 29, 2026 (UTC). Announcements and account entitle
 The [public Decisions guide](https://developers.openai.com/api/docs/guides/decisions) documents `POST /v1/decisions` and `gpt-6-luna`. Upstream 0.2.13 added a compatibility adapter (`src/openai-decisions.ts`); this fork does not ship it (smarty-dev#3155 review: the adapter forwarded the OpenAI API key to a caller-supplied `baseUrl`, and the fleet does not use OpenAI API keys for Decisions).
 
 - This extension registers no OpenAI classifier and does not touch OpenAI chat transport, catalog, or credentials.
-- `openai_decide` works with explicitly selected host-registered classifiers (for example Jev). Every request is confirmed per call with a payload preview, or refused without a UI unless `decisions.allowWithoutConfirmation` is set.
+- `openai_decide` is not registered in this fork. Re-enabling it needs a scrollable or paged confirmation that defaults to No, as its own reviewed PR.
 - Re-adding OpenAI Decisions requires binding credentials to the trusted catalog endpoint and a signed-in real-host proof.
 
 ### Evaluation checklist
