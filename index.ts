@@ -79,7 +79,11 @@ import {
 import { ResetController } from "./src/reset-controller.ts";
 import { registerOpenAIImage, _imageTest } from "./src/image.ts";
 import { registerOpenAIWebSearch, _websearchTest } from "./src/websearch.ts";
-import { registerOpenAIDecisions } from "./src/decisions.ts";
+import {
+  availableClassifiers,
+  cachedAvailableClassifierModelKeys,
+  registerOpenAIDecisions,
+} from "./src/decisions.ts";
 import type { OptionalTool } from "./src/optional-tool.ts";
 import {
   type CodexPetPackage,
@@ -991,16 +995,12 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
             "Typed decision settings",
             () => {
               const next = config(ctx);
-              const models = ctx.modelRegistry.getModelsOfType("classifier");
+              // Only classifiers that passed the shared availability predicate when the
+              // picker opened; evaluateDecision re-checks availability on every request.
+              const models = cachedAvailableClassifierModelKeys();
               return settingsItemsFromDescriptors(DECISIONS_SETTING_DESCRIPTORS, next, {
                 "decisions.model": {
-                  values: [
-                    ...new Set([
-                      "",
-                      next.decisions.model,
-                      ...models.map((model) => `${model.provider}/${model.id}`),
-                    ]),
-                  ],
+                  values: [...new Set(["", next.decisions.model, ...models])],
                 },
               });
             },
@@ -1113,6 +1113,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       return;
     }
     await loadSettingsListTheme();
+    await availableClassifiers(ctx.modelRegistry);
     try {
       petController.settingsPets = await listCodexPets();
     } catch {

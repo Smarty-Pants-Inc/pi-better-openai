@@ -92,7 +92,14 @@ try {
   assert.equal(
     modelRuntime.getRegisteredProviderIds().includes("openai"),
     false,
-    "keep native OpenAI auth and transport",
+    "keep native OpenAI auth and transport (no Decisions adapter is shipped)",
+  );
+  // openai_decide selects only from availability (src/decisions.ts availableClassifiers);
+  // the host hides its OpenAI Decisions classifier from ChatGPT OAuth there.
+  assert.deepEqual(
+    await modelRuntime.getAvailableOfType("classifier", "openai"),
+    [],
+    "OpenAI OAuth must not make an OpenAI classifier selectable for decisions",
   );
   assert.equal(modelRuntime.isUsingOAuth("openai"), true);
   assert.equal(modelRuntime.isUsingSubscription("openai"), true);

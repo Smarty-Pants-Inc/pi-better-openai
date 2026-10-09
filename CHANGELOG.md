@@ -4,6 +4,7 @@
 
 - Confirm every `openai_decide` request with a payload preview (destination, size, truncated JSON state) before it leaves the machine; refuse without a UI unless `decisions.allowWithoutConfirmation` is true.
 - Do not ship upstream's native OpenAI Decisions compatibility adapter (smarty-dev#3155).
+- List, accept, and call only classifiers that pass the host's credential availability check; fail closed on hosts without the classifier API.
 
 ## 0.2.13
 

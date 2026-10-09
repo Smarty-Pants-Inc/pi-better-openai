@@ -13,9 +13,14 @@ import type {
   ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { createModels, InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  availableClassifiers,
   buildDecisionConfirmation,
+  cachedAvailableClassifierModelKeys,
+  findAvailableClassifier,
   DECISION_PREVIEW_CHARS,
   evaluateDecision,
   registerOpenAIDecisions,
@@ -31,6 +36,13 @@ const model = {
   provider: "typesafe",
   id: "jev-latest",
   api: "typesafe-system-one",
+} as ClassifierModel<ClassifierApi>;
+const rawOnly = {
+  type: "classifier",
+  provider: "openai",
+  id: "gpt-6-luna",
+  api: "openai-decisions",
+  baseUrl: "https://api.openai.com/v1",
 } as ClassifierModel<ClassifierApi>;
 const input = {
   state: { failures: ["timeout connecting to test database"] },
@@ -92,10 +104,15 @@ function harness() {
   const ctx = {
     modelRegistry: {
       classify,
+      // Raw catalog also contains a classifier the current credentials cannot use
+      // (as Pi does for OpenAI Decisions under ChatGPT OAuth). It must never be used.
       getModelOfType: vi.fn((type: string, provider: string, id: string) =>
-        type === "classifier" && provider === model.provider && id === model.id ? model : undefined,
+        type === "classifier"
+          ? [model, rawOnly].find((m) => m.provider === provider && m.id === id)
+          : undefined,
       ),
-      getModelsOfType: vi.fn(() => [model]),
+      getModelsOfType: vi.fn(() => [model, rawOnly]),
+      getAvailableOfType: vi.fn(async (type: string) => (type === "classifier" ? [model] : [])),
     },
     hasUI: true,
     ui: { notify: vi.fn(), confirm: vi.fn(async () => true) },
@@ -128,6 +145,81 @@ describe("native typed decisions", () => {
     expect(response.usage).toEqual(usage);
     expect(response.isError).toBeUndefined();
     expect(response.content[0]!.text).not.toContain("timeout connecting");
+  });
+
+  test("lists, accepts, and uses only classifiers passing the shared availability predicate", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-decisions-"));
+    scratch.push(dir);
+    const path = configPaths(dir).project;
+    const { ctx, cfg, classify, confirm } = harness();
+    const commands = new Map<
+      string,
+      { handler: (args: string, ctx: ExtensionContext) => Promise<void> }
+    >();
+    registerOpenAIDecisions(
+      {
+        registerTool: vi.fn(),
+        registerCommand: (
+          name: string,
+          cmd: { handler: (args: string, ctx: ExtensionContext) => Promise<void> },
+        ) => commands.set(name, cmd),
+      } as unknown as ExtensionAPI,
+      () => resolveConfig(dir),
+      () => resolveConfig(dir),
+    );
+    const command = commands.get("openai-decisions")!;
+    await command.handler("models", ctx);
+    const listed = vi.mocked(ctx.ui.notify).mock.calls.at(-1)![0];
+    expect(listed).toContain("typesafe/jev-latest");
+    expect(listed).not.toContain("openai/gpt-6-luna");
+    await command.handler("use openai/gpt-6-luna", ctx);
+    expect(vi.mocked(ctx.ui.notify).mock.calls.at(-1)).toEqual([
+      expect.stringContaining("unavailable"),
+      "error",
+    ]);
+    expect(readRawConfig(path).decisions).toBeUndefined();
+    // A hand-edited config cannot reach a raw-catalog-only classifier either.
+    const rawOnlyCfg = { ...cfg, decisions: { ...cfg.decisions, model: "openai/gpt-6-luna" } };
+    expect((await evaluateDecision(ctx, rawOnlyCfg, input)).structuredContent).toMatchObject({
+      error: expect.stringContaining("unavailable"),
+    });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(classify).not.toHaveBeenCalled();
+    expect(ctx.modelRegistry.getModelOfType).not.toHaveBeenCalled();
+    expect(cachedAvailableClassifierModelKeys()).toEqual(["typesafe/jev-latest"]);
+  });
+
+  test("fails closed on hosts without the classifier availability API or when it throws", async () => {
+    const { ctx, cfg, classify } = harness();
+    expect(await availableClassifiers({})).toEqual([]);
+    expect(cachedAvailableClassifierModelKeys()).toEqual([]);
+    const legacy = { ...ctx, modelRegistry: { classify } } as unknown as typeof ctx;
+    expect((await evaluateDecision(legacy, cfg, input)).isError).toBe(true);
+    vi.mocked(ctx.modelRegistry.getAvailableOfType).mockRejectedValue(new Error("auth broke"));
+    expect((await evaluateDecision(ctx, cfg, input)).isError).toBe(true);
+    expect(classify).not.toHaveBeenCalled();
+  });
+
+  test("real Pi registry: OpenAI Decisions under ChatGPT OAuth is in the raw catalog but not selectable", async () => {
+    const credentials = new InMemoryCredentialStore();
+    const registry = createModels({
+      credentials,
+      authContext: { env: async () => undefined, fileExists: async () => false },
+    });
+    registry.setProvider(builtinProviders().find((p) => p.id === "openai")!);
+    await credentials.modify("openai", async () => ({
+      type: "oauth",
+      access: "synthetic",
+      refresh: "synthetic",
+      expires: Date.now() + 3_600_000,
+    }));
+    expect(registry.getModelOfType("classifier", "openai", "gpt-6-luna")).toBeDefined();
+    expect(await findAvailableClassifier(registry, "openai", "gpt-6-luna")).toBeUndefined();
+    await credentials.modify("openai", async () => ({ type: "api_key", key: "synthetic" }));
+    expect(await findAvailableClassifier(registry, "openai", "gpt-6-luna")).toMatchObject({
+      provider: "openai",
+      id: "gpt-6-luna",
+    });
   });
 
   test("declined confirmation sends nothing", async () => {

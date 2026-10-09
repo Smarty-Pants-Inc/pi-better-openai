@@ -1,6 +1,8 @@
 import {
   Type,
+  type ClassifierApi,
   type ClassifierContext,
+  type ClassifierModel,
   type ClassifierResult,
   type Static,
 } from "@earendil-works/pi-ai";
@@ -238,6 +240,47 @@ export function validateDecisionAnswers(
   return clean;
 }
 
+type ClassifierRegistry = Pick<ExtensionContext["modelRegistry"], "getAvailableOfType">;
+let cachedAvailableClassifierKeys: string[] = [];
+
+/**
+ * The single availability predicate for decisions: only classifiers the host reports
+ * as usable with the current credentials (e.g. Pi hides OpenAI Decisions from OAuth
+ * credentials only in availability, not in the raw catalog). Fails closed on hosts
+ * without the classifier API or on lookup errors.
+ */
+export async function availableClassifiers(
+  registry: Partial<ClassifierRegistry>,
+  signal?: AbortSignal,
+): Promise<readonly ClassifierModel<ClassifierApi>[]> {
+  let models: readonly ClassifierModel<ClassifierApi>[] = [];
+  if (typeof registry.getAvailableOfType === "function") {
+    try {
+      models = await registry.getAvailableOfType("classifier", undefined, { signal });
+    } catch {
+      models = [];
+    }
+  }
+  cachedAvailableClassifierKeys = models.map((m) => `${m.provider}/${m.id}`);
+  return models;
+}
+
+/** Last availability result, for synchronous UI pickers. Selection is re-checked at use. */
+export function cachedAvailableClassifierModelKeys(): readonly string[] {
+  return cachedAvailableClassifierKeys;
+}
+
+export async function findAvailableClassifier(
+  registry: Partial<ClassifierRegistry>,
+  provider: string,
+  id: string,
+  signal?: AbortSignal,
+): Promise<ClassifierModel<ClassifierApi> | undefined> {
+  return (await availableClassifiers(registry, signal)).find(
+    (m) => m.provider === provider && m.id === id,
+  );
+}
+
 export const DECISION_PREVIEW_CHARS = 2000;
 
 function endpointHost(baseUrl: unknown): string {
@@ -295,7 +338,13 @@ export async function evaluateDecision(
       key,
       "Select an explicit native classifier with /openai-decisions use provider/model.",
     );
-    const model = ctx.modelRegistry.getModelOfType("classifier", key.provider, key.id);
+    const model = await findAvailableClassifier(
+      ctx.modelRegistry,
+      key.provider,
+      key.id,
+      controller.signal,
+    );
+    requireDecision(!controller.signal.aborted, "Decision request aborted.");
     requireDecision(
       model,
       "The configured native classifier is unavailable. Inspect /openai-decisions models; no chat fallback is used.",
@@ -404,19 +453,19 @@ export function registerOpenAIDecisions(
         save(ctx, { enabled: false });
         ctx.ui.notify("Decision requests disabled.", "info");
       } else if (arg === "models") {
-        const models = ctx.modelRegistry.getModelsOfType("classifier");
+        const models = await availableClassifiers(ctx.modelRegistry);
         ctx.ui.notify(
           models.length
             ? models.map((m) => `${m.provider}/${m.id}`).join("\n") +
-                "\nCatalog entries do not guarantee credentials or entitlement."
-            : "No native classifiers registered.",
+                "\nAvailable with current credentials; account entitlement is not guaranteed."
+            : "No native classifiers available with the current credentials.",
           "info",
         );
       } else if (arg.startsWith("use ")) {
         const key = parseModelKey(arg.slice(4));
-        if (!key || !ctx.modelRegistry.getModelOfType("classifier", key.provider, key.id)) {
+        if (!key || !(await findAvailableClassifier(ctx.modelRegistry, key.provider, key.id))) {
           ctx.ui.notify(
-            "Unknown native classifier. Use /openai-decisions models; chat models are not accepted.",
+            "Unknown or unavailable native classifier. Use /openai-decisions models; chat models and classifiers unavailable with the current credentials are not accepted.",
             "error",
           );
           return;
@@ -430,7 +479,7 @@ export function registerOpenAIDecisions(
       } else if (!arg) {
         const cfg = getConfig(ctx).decisions;
         ctx.ui.notify(
-          `Decisions: ${cfg.enabled ? "enabled" : "disabled"}; model: ${cfg.model || "not selected"}; timeout: ${cfg.timeoutMs}ms.\n/openai-decisions models | use provider/model | off\nThis extension does not ship an OpenAI Decisions adapter; only host-registered classifiers are listed.`,
+          `Decisions: ${cfg.enabled ? "enabled" : "disabled"}; model: ${cfg.model || "not selected"}; timeout: ${cfg.timeoutMs}ms.\n/openai-decisions models | use provider/model | off\nThis extension does not ship an OpenAI Decisions adapter; only host classifiers available with the current credentials are listed.`,
           "info",
         );
       } else {
