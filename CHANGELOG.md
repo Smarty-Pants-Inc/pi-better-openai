@@ -2,11 +2,13 @@
 
 ## Unreleased (Smarty fork)
 
-- Confirm every `openai_decide` request with a payload preview (destination, size, truncated JSON state) before it leaves the machine; refuse without a UI unless `decisions.allowWithoutConfirmation` is true.
+- **Typed decisions are disabled in this fork** (smarty-dev#3155): `openai_decide`, `/openai-decisions` and the Typed decisions settings section are not registered, because Pi's confirmation UI cannot yet show a complete request safely. Legacy `decisions.*` settings still load and have no effect.
 - Do not ship upstream's native OpenAI Decisions compatibility adapter (smarty-dev#3155).
-- List, accept, and call only classifiers that pass the host's credential availability check; fail closed on hosts without the classifier API.
+- The unregistered decisions module (`src/decisions.ts`) keeps a per-call confirmation that previews the complete request or refuses it, and a credential-availability filter, for when the feature returns.
 
 ## 0.2.13
+
+_Historical upstream release notes. In this fork, typed decisions are disabled (see Unreleased)._
 
 - Add a native OpenAI Decisions compatibility classifier for hosts without upstream support, preserving OpenAI chat/auth and deferring to the host adapter when available.
 - Support typed predicates, choices, scores, inline images, cancellation, hooks, HTTP retries, and input-only usage accounting through native codemode and pi-fabric.
