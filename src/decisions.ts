@@ -238,6 +238,40 @@ export function validateDecisionAnswers(
   return clean;
 }
 
+export const DECISION_PREVIEW_CHARS = 2000;
+
+function endpointHost(baseUrl: unknown): string {
+  if (typeof baseUrl !== "string" || !baseUrl) return "provider-defined endpoint";
+  try {
+    return new URL(baseUrl).host || "provider-defined endpoint";
+  } catch {
+    return "provider-defined endpoint";
+  }
+}
+
+/** Builds the per-call egress confirmation shown before any decision request leaves the machine. */
+export function buildDecisionConfirmation(
+  model: { provider: string; id: string; baseUrl?: unknown },
+  request: ClassifierContext,
+): { title: string; message: string } {
+  const state = JSON.stringify(request.state, null, 2);
+  const size = Buffer.byteLength(JSON.stringify(request), "utf8");
+  const truncated = state.length > DECISION_PREVIEW_CHARS;
+  const preview = truncated ? `${state.slice(0, DECISION_PREVIEW_CHARS)}\n…` : state;
+  const questions = Object.keys(request.questions);
+  return {
+    title: "Send decision request?",
+    message: [
+      `Destination: ${model.provider}/${model.id} (${endpointHost(model.baseUrl)})`,
+      `Total request size: ${size} bytes${truncated ? ` (preview truncated to ${DECISION_PREVIEW_CHARS} chars)` : ""}`,
+      `Questions (${questions.length}): ${questions.join(", ").slice(0, 500)}`,
+      "State to be sent:",
+      preview,
+      "Decline if this contains secrets or data that must not leave this machine.",
+    ].join("\n"),
+  };
+}
+
 export async function evaluateDecision(
   ctx: ExtensionContext,
   cfg: ResolvedConfig,
@@ -268,6 +302,21 @@ export async function evaluateDecision(
     );
     const request = validateDecisionRequest(input);
     requireDecision(!controller.signal.aborted, "Decision request aborted.");
+    // Single egress choke point for every classifier: the model controls `state`,
+    // so each request needs explicit user consent (or an explicit headless opt-in).
+    if (ctx.hasUI) {
+      const confirmation = buildDecisionConfirmation(model, request);
+      const accepted = await ctx.ui.confirm(confirmation.title, confirmation.message, {
+        signal: controller.signal,
+      });
+      requireDecision(!controller.signal.aborted, "Decision request aborted.");
+      requireDecision(accepted === true, "Decision request declined by user; nothing was sent.");
+    } else {
+      requireDecision(
+        cfg.decisions.allowWithoutConfirmation === true,
+        "Decision request refused: no UI is available to confirm it. Set decisions.allowWithoutConfirmation to true to allow unattended requests.",
+      );
+    }
     const cancelled = new Promise<never>((_resolve, reject) => {
       abortListener = () =>
         reject(

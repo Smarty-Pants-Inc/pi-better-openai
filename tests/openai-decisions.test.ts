@@ -374,16 +374,32 @@ describe("OpenAI Decisions compatibility", () => {
     expect(nativeModel).toBeDefined();
     expect(await registry.getAvailableOfType("classifier", "openai")).toEqual([nativeModel]);
     const fetch = transport();
+    const confirm = vi.fn(async (_title: string, _message: string) => false);
     const ctx = {
+      hasUI: true,
+      ui: { confirm } as unknown as ExtensionContext["ui"],
       modelRegistry: {
         getModelOfType: registry.getModelOfType.bind(registry),
         classify: (m, c, o) => registry.classify(m, c, { ...o, fetch }),
       },
     } as ExtensionContext;
     const cfg = makeResolvedConfig({
-      decisions: { enabled: true, model: "openai/gpt-6-luna", timeoutMs: 1000 },
+      decisions: {
+        enabled: true,
+        model: "openai/gpt-6-luna",
+        timeoutMs: 1000,
+        allowWithoutConfirmation: false,
+      },
     });
+    const declined = await evaluateDecision(ctx, cfg, context);
+    expect(declined.isError).toBe(true);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(confirm.mock.calls[0]![1]).toContain("openai/gpt-6-luna (api.openai.com)");
+    confirm.mockResolvedValue(true);
     const result = await evaluateDecision(ctx, cfg, context);
+    expect(JSON.parse(String(fetch.mock.calls[0]![1]?.body)).input).toBe(
+      JSON.stringify(context.state),
+    );
     expect(result.structuredContent).toMatchObject({
       status: "ok",
       provider: "openai",

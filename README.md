@@ -101,7 +101,8 @@ Example config:
   "decisions": {
     "enabled": false,
     "model": "",
-    "timeoutMs": 10000
+    "timeoutMs": 10000,
+    "allowWithoutConfirmation": false
   },
   "usage": {
     "enabled": true,
@@ -208,6 +209,7 @@ Example tool input:
 ```
 
 - `state`: JSON object; send only the necessary context, never credentials or the entire session.
+- **Per-call confirmation.** The model chooses `state`, so every `openai_decide` request is confirmed before anything leaves the machine. Interactive sessions show a dialog with the destination (provider/model and endpoint host), the total request size, the question names, and a preview of the exact JSON state (first 2,000 characters). Declining fails the tool with "declined by user" and sends nothing. Without a UI (print/JSON/RPC mode) requests are refused unless `decisions.allowWithoutConfirmation` is `true` (default `false`); only set it for unattended runs whose inputs you trust. This applies to every configured classifier.
 - `questions`: 1–32 named questions. `choice` uses 2–64 labeled criteria; `bool` uses `true`/`false` criteria; `score` uses 2–64 ordered criteria. Pi maps boolean questions to OpenAI's `predicate` or Jev's `noul` representation.
 - Total input is capped at 64 KiB. `decisions.timeoutMs` defaults to 10000 and is clamped to 1000–60000. Cancellation/deadlines abort the provider request; there are no automatic retries. A timed-out upstream request may still incur charges.
 - Results have `status: "ok"`, provider/model provenance, and typed `answers`; errors have `status: "error"` and mark the tool failed. Structured output is available to programmatic callers. Provider error text is withheld to prevent credential/state leakage.

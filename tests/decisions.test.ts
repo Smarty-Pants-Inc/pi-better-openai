@@ -15,6 +15,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  buildDecisionConfirmation,
+  DECISION_PREVIEW_CHARS,
   evaluateDecision,
   registerOpenAIDecisions,
   validateDecisionAnswers,
@@ -79,7 +81,12 @@ const result: ClassifierResult = {
 
 function harness() {
   const cfg = makeResolvedConfig({
-    decisions: { enabled: true, model: "typesafe/jev-latest", timeoutMs: 1000 },
+    decisions: {
+      enabled: true,
+      model: "typesafe/jev-latest",
+      timeoutMs: 1000,
+      allowWithoutConfirmation: false,
+    },
   });
   const classify = vi.fn(async () => structuredClone(result));
   const ctx = {
@@ -90,11 +97,12 @@ function harness() {
       ),
       getModelsOfType: vi.fn(() => [model]),
     },
-    ui: { notify: vi.fn() },
+    hasUI: true,
+    ui: { notify: vi.fn(), confirm: vi.fn(async () => true) },
     tools: [],
     executeTool: vi.fn(),
   } as unknown as ExtensionToolContext;
-  return { ctx, cfg, classify };
+  return { ctx, cfg, classify, confirm: vi.mocked(ctx.ui.confirm) };
 }
 
 const scratch: string[] = [];
@@ -120,6 +128,82 @@ describe("native typed decisions", () => {
     expect(response.usage).toEqual(usage);
     expect(response.isError).toBeUndefined();
     expect(response.content[0]!.text).not.toContain("timeout connecting");
+  });
+
+  test("declined confirmation sends nothing", async () => {
+    const { ctx, cfg, classify, confirm } = harness();
+    confirm.mockResolvedValue(false);
+    const response = await evaluateDecision(ctx, cfg, input);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(classify).not.toHaveBeenCalled();
+    expect(response.isError).toBe(true);
+    expect(response.structuredContent).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("declined by user"),
+    });
+  });
+
+  test("accepted confirmation previews destination and exact state, then sends the same payload", async () => {
+    const { ctx, cfg, classify, confirm } = harness();
+    const response = await evaluateDecision(ctx, cfg, input);
+    expect(confirm).toHaveBeenCalledOnce();
+    const [title, message] = confirm.mock.calls[0]!;
+    expect(title).toBe("Send decision request?");
+    expect(message).toContain("typesafe/jev-latest");
+    expect(message).toContain(JSON.stringify(input.state, null, 2));
+    expect(message).toContain(`${Buffer.byteLength(JSON.stringify(input))} bytes`);
+    expect(classify).toHaveBeenCalledExactlyOnceWith(model, input, {
+      signal: expect.any(AbortSignal),
+      maxRetries: 0,
+    });
+    expect(response.isError).toBeUndefined();
+  });
+
+  test("confirmation shows the endpoint host and truncates large state previews", () => {
+    const big = { ...input, state: { text: "y".repeat(10_000) } };
+    const { message } = buildDecisionConfirmation(
+      { provider: "openai", id: "gpt-6-luna", baseUrl: "https://api.openai.com/v1" },
+      big,
+    );
+    expect(message).toContain("openai/gpt-6-luna (api.openai.com)");
+    expect(message).toContain(`truncated to ${DECISION_PREVIEW_CHARS} chars`);
+    expect(message).toContain(`${Buffer.byteLength(JSON.stringify(big))} bytes`);
+    expect(message.length).toBeLessThan(DECISION_PREVIEW_CHARS + 1000);
+    expect(buildDecisionConfirmation(model, input).message).toContain("provider-defined endpoint");
+  });
+
+  test("without a UI, refuses by default and sends only with allowWithoutConfirmation", async () => {
+    const { ctx, cfg, classify, confirm } = harness();
+    const headless = { ...ctx, hasUI: false } as typeof ctx;
+    const refused = await evaluateDecision(headless, cfg, input);
+    expect(refused.isError).toBe(true);
+    expect(refused.structuredContent).toMatchObject({
+      error: expect.stringContaining("decisions.allowWithoutConfirmation"),
+    });
+    expect(classify).not.toHaveBeenCalled();
+    const allowed = await evaluateDecision(
+      headless,
+      { ...cfg, decisions: { ...cfg.decisions, allowWithoutConfirmation: true } },
+      input,
+    );
+    expect(allowed.isError).toBeUndefined();
+    expect(classify).toHaveBeenCalledExactlyOnceWith(model, input, {
+      signal: expect.any(AbortSignal),
+      maxRetries: 0,
+    });
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  test("cancelling while the confirmation is open sends nothing", async () => {
+    const { ctx, cfg, classify, confirm } = harness();
+    const controller = new AbortController();
+    confirm.mockImplementation(async () => {
+      controller.abort();
+      return true;
+    });
+    const response = await evaluateDecision(ctx, cfg, input, controller.signal);
+    expect(response.structuredContent).toMatchObject({ error: "Decision request aborted." });
+    expect(classify).not.toHaveBeenCalled();
   });
 
   test("is disabled by default and never auto-selects a provider or chat fallback", async () => {
@@ -240,6 +324,7 @@ describe("native typed decisions", () => {
     classify.mockImplementation(() => new Promise(() => {}));
     const controller = new AbortController();
     const pending = evaluateDecision(ctx, cfg, input, controller.signal);
+    await vi.waitFor(() => expect(classify).toHaveBeenCalledOnce());
     controller.abort();
     expect((await pending).structuredContent).toMatchObject({ error: "Decision request aborted." });
     const options = vi.mocked(ctx.modelRegistry.classify).mock.calls[0]![2]!;

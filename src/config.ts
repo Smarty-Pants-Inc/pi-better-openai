@@ -145,6 +145,11 @@ export type DecisionsConfig = {
   enabled?: boolean;
   model?: string;
   timeoutMs?: number;
+  /**
+   * Headless/print mode only: send decision requests without the per-call
+   * payload confirmation. Default false (refuse when no UI can confirm).
+   */
+  allowWithoutConfirmation?: boolean;
 };
 
 export interface ConfigFile {
@@ -241,6 +246,7 @@ export const DEFAULT_DECISIONS_CONFIG: Required<DecisionsConfig> = {
   enabled: false,
   model: "",
   timeoutMs: 10_000,
+  allowWithoutConfirmation: false,
 };
 
 export const DEFAULT_CONFIG: ConfigFile = {
@@ -650,6 +656,17 @@ export const DECISIONS_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] 
     parse: numberSetting,
     description: "Maximum decision request duration; no automatic retries.",
   },
+  {
+    id: "decisions.allowWithoutConfirmation",
+    section: "decisions",
+    key: "allowWithoutConfirmation",
+    label: "Allow without confirmation (headless)",
+    values: ["false", "true"],
+    currentValue: (cfg) => String(cfg.decisions.allowWithoutConfirmation),
+    parse: booleanSetting,
+    description:
+      "Interactive sessions always confirm each decision request with a payload preview. Without a UI (print/RPC mode) requests are refused unless this is true. Default false.",
+  },
 ];
 
 export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
@@ -748,6 +765,9 @@ export function readConfig(path: string): ConfigFile | undefined {
       Number.isFinite(parsed.decisions.timeoutMs)
     )
       config.decisions.timeoutMs = parsed.decisions.timeoutMs;
+    if (Object.hasOwn(parsed.decisions, "allowWithoutConfirmation"))
+      config.decisions.allowWithoutConfirmation =
+        parsed.decisions.allowWithoutConfirmation === true;
   } else if (Object.hasOwn(parsed, "decisions")) {
     config.decisions = { enabled: false, model: "" };
   }
