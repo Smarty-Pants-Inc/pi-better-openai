@@ -21,7 +21,6 @@ import { registerOptionalTool } from "../src/optional-tool.ts";
 const features = {
   image: "openai_image",
   websearch: "openai_websearch",
-  decisions: "openai_decide",
 } as const;
 
 afterEach(() => {
@@ -71,6 +70,12 @@ test("real Pi hides disabled tools and guidance, and settings restore and withdr
     usage: { enabled: false },
     pets: { enabled: false },
     footer: { mode: "off" },
+    decisions: {
+      enabled: true,
+      model: "typesafe/jev-latest",
+      allowWithoutConfirmation: true,
+      unknown: "keep",
+    },
   };
   writeConfig(configPath, {
     ...baseConfig,
@@ -104,6 +109,7 @@ test("real Pi hides disabled tools and guidance, and settings restore and withdr
   try {
     await loader.reload();
     expect(loader.getExtensions().errors).toEqual([]);
+    expect(loader.getExtensions().extensions[0]!.commands.has("openai-decisions")).toBe(false);
     const modelRuntime = await ModelRuntime.create({
       authPath: join(agentDir, "auth.json"),
       modelsPath: null,
@@ -122,6 +128,8 @@ test("real Pi hides disabled tools and guidance, and settings restore and withdr
     const errors: unknown[] = [];
     current.extensionRunner!.onError((error) => errors.push(error));
     const assertExposure = (name: string, enabled: boolean, declared = enabled) => {
+      expect(current.getToolDefinition("openai_decide")).toBeUndefined();
+      expect(current.getCallableToolNames()).not.toContain("openai_decide");
       const definition = current.getToolDefinition(name)!;
       expect(definition.exposure).toBe(enabled ? "direct" : "hidden");
       expect(current.getActiveToolNames().includes(name)).toBe(enabled);
@@ -151,6 +159,11 @@ test("real Pi hides disabled tools and guidance, and settings restore and withdr
           undefined as unknown as Parameters<typeof factory>[2],
           vi.fn(),
         );
+        const settings = component.render(120).join("\n");
+        expect(settings).toContain("Web search tool");
+        expect(settings).not.toContain("Typed decisions");
+        expect(settings).not.toContain("Enable decisions");
+        expect(settings).not.toContain("Classifier model");
         for (const char of feature) component.handleInput?.(char);
         component.handleInput?.("\r"); // Enter the matching settings section.
         component.handleInput?.("\r"); // Enable its first setting.
@@ -177,13 +190,13 @@ test("real Pi hides disabled tools and guidance, and settings restore and withdr
     current.extensionRunner!.setUIContext(undefined, "print");
     expect(current.getActiveToolNames()).toEqual(unrelated);
     expect(readRawConfig(configPath).unknown).toBe("keep");
+    expect(readRawConfig(configPath).decisions).toEqual(baseConfig.decisions);
 
     // Apply default feature flags through the same refresh used by settings.
     writeConfig(configPath, baseConfig);
     await current.prompt("/openai-tier standard");
     assertExposure(features.image, true);
     assertExposure(features.websearch, true);
-    assertExposure(features.decisions, false);
     for (const name of [features.image, features.websearch]) {
       expect(current.systemPrompt).toContain(current.getToolDefinition(name)!.promptSnippet);
     }

@@ -34,7 +34,6 @@ Pi labels `openai-codex` **legacy**, but this extension's usage polling, banked 
 
 - GPT-6.1 Sol, GPT-6 Astra, and Daybreak Blue/Red model fallbacks for the built-in `openai-codex` provider.
 - Standard, Fast, and capability-gated Ultrafast service tiers via `/openai-tier` or `/openai-settings`; `/fast` remains a quick Fast toggle.
-- Opt-in typed decisions through `openai_decide`, using an explicitly selected Pi classifier provider (including Jev), with per-call confirmation of the outgoing payload.
 - OpenAI subscription usage display via `/openai-usage` and the footer.
 - Interactive settings picker via `/openai-settings`.
 - Footer customization for model, thinking, fast mode, usage, and token/cost context.
@@ -44,7 +43,6 @@ Pi labels `openai-codex` **legacy**, but this extension's usage polling, banked 
 - Commands:
   - `/fast` toggles Fast and Standard; it never enables Ultrafast.
   - `/openai-tier [standard|fast|ultrafast]` shows or selects the requested service tier.
-  - `/openai-decisions [models|use provider/model|off]` inspects or configures typed decisions.
   - `/openai-image <prompt>` generates an image directly.
   - `/openai-websearch <query>` searches the web and inserts the cited answer into the session.
   - `/pets [help|list|wake [slug]|tuck|select <slug>]` renders or manages custom pets from `${CODEX_HOME:-~/.codex}/pets`.
@@ -136,7 +134,7 @@ Example config:
 }
 ```
 
-Setting `image.enabled`, `websearch.enabled`, or `decisions.enabled` to `false` hides that tool and removes its system-prompt guidance, including from pi-fabric capture. Changes in `/openai-settings` or `/openai-decisions` apply immediately; use `/reload` after editing config files manually. Configuration commands remain available.
+Setting `image.enabled` or `websearch.enabled` to `false` hides that tool and removes its system-prompt guidance, including from pi-fabric capture. Changes in `/openai-settings` apply immediately; use `/reload` after editing config files manually. Configuration commands remain available. Legacy `decisions` config fields remain readable but are ignored in this fork.
 
 ## Service tiers
 
@@ -150,41 +148,7 @@ The footer shows `fast` or `ultrafast` only when supported by the current model.
 
 ## Typed decisions
 
-The `openai_decide` tool returns typed judgments through Pi's classifier API, **not chat completions**. It is disabled by default and never chooses a provider automatically. To use an existing Jev classifier explicitly:
-
-```text
-/openai-decisions models
-/openai-decisions use typesafe/jev-latest
-```
-
-Configure that provider's credentials through Pi (for example, `TYPESAFE_API_KEY` for TypeSafe). `/openai-decisions models`, `/openai-decisions use`, the settings picker, and every `openai_decide` request use one shared availability check: only classifiers the Pi host reports as usable with the current credentials are listed, accepted, or called; a configured classifier that is no longer available is shown as "(unavailable)" in the picker but cannot be selected (for example, a classifier that requires an API key is not selectable with only ChatGPT OAuth). Availability does not guarantee account entitlement. `/openai-decisions use` saves the selected model and enables decisions in the active project/global config; `/openai-decisions off` disables requests. These settings are independent of service-tier persistence. Provider-qualified IDs containing further slashes, such as `openrouter/typesafe/jev-1.13`, are supported when registered by the host. Prefer pinned versions for stable evaluations.
-
-**Native OpenAI Decisions:** the native OpenAI Decisions adapter from upstream 0.2.13 is not shipped in this fork; tracked in smarty-dev#3155. This extension registers no OpenAI classifier and sends no OpenAI API key anywhere. A classifier registered by the Pi host itself is only used if you select it explicitly, and every `openai_decide` request still requires the per-call confirmation below.
-
-### Optional bounded tool
-
-Example tool input:
-
-```json
-{
-  "state": { "testFailure": "connection to local test database timed out" },
-  "questions": {
-    "route": {
-      "type": "choice",
-      "instructions": "Classify the failure for human review.",
-      "criteria": { "environment": "Environment problem", "code": "Code defect" }
-    }
-  }
-}
-```
-
-- `state`: JSON object; send only the necessary context, never credentials or the entire session.
-- **Per-call confirmation.** The model chooses `state`, so every `openai_decide` request is confirmed before anything leaves the machine. Interactive sessions show a dialog with the destination (provider/model and endpoint host), the total request size, and the complete request exactly as it will be sent (the JSON state plus every question with its instructions and criteria; the preview is pure printable ASCII: every non-ASCII character, including ordinary non-English text and emoji, and every control character appears as a JSON escape (`\uXXXX`, or the short forms such as `\n` and `\t` inside strings); the destination line also escapes newlines, so configured provider or model names cannot add lines, with characters outside the Basic Multilingual Plane shown as two escapes; the request sent is parsed back from exactly this text, so its meaning is unchanged). Requests whose escaped preview exceeds 16 KiB are refused ("too large to preview; reduce state") instead of truncated, so nothing undisplayed is ever sent. Declining fails the tool with "declined by user" and sends nothing. Without a UI (print/JSON/RPC mode) requests are refused unless `decisions.allowWithoutConfirmation` is `true` (default `false`); only set it for unattended runs whose inputs you trust. This applies to every configured classifier.
-- `questions`: 1–32 named questions. `choice` uses 2–64 labeled criteria; `bool` uses `true`/`false` criteria; `score` uses 2–64 ordered criteria. Pi maps boolean questions to the provider's representation (for example, Jev's `noul`).
-- Total input is capped at 64 KiB. `decisions.timeoutMs` defaults to 10000 and is clamped to 1000–60000. Cancellation/deadlines abort the provider request; there are no automatic retries. A timed-out upstream request may still incur charges.
-- Results have `status: "ok"`, provider/model provenance, and typed `answers`; errors have `status: "error"` and mark the tool failed. Structured output is available to programmatic callers. Provider error text is withheld to prevent credential/state leakage.
-- Probabilities and confidence remain uncertain judgments; scores retain their provider-specific scale. No claim of cross-provider calibration is made. Decisions never authorize tools, execute commands, change the active model, or start background polling.
-- Reported classifier token usage/cost is included in tool results and the Better OpenAI footer. Missing usage or catalog pricing is not evidence that a request was free.
+Typed decisions (openai_decide, /openai-decisions) are disabled in this fork: the Pi confirmation UI cannot yet show a complete request safely. Tracked in smarty-dev#3155.
 
 ## Codex model fallbacks
 

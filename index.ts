@@ -1,7 +1,7 @@
 /**
  * Better OpenAI for pi.
  *
- * Adds capability-gated OpenAI service tiers and opt-in native typed decisions.
+ * Adds capability-gated OpenAI service tiers and subscription workflow tools.
  */
 import {
   type ExtensionAPI,
@@ -47,7 +47,6 @@ import {
   WEBSEARCH_SETTING_DESCRIPTORS,
   PET_SETTING_DESCRIPTORS,
   FAST_SETTING_DESCRIPTORS,
-  DECISIONS_SETTING_DESCRIPTORS,
   isServiceTier,
   type SettingsOptionDescriptor,
   configPaths,
@@ -79,12 +78,6 @@ import {
 import { ResetController } from "./src/reset-controller.ts";
 import { registerOpenAIImage, _imageTest } from "./src/image.ts";
 import { registerOpenAIWebSearch, _websearchTest } from "./src/websearch.ts";
-import {
-  availableClassifiers,
-  cachedAvailableClassifierModelKeys,
-  decisionModelPickerOverride,
-  registerOpenAIDecisions,
-} from "./src/decisions.ts";
 import type { OptionalTool } from "./src/optional-tool.ts";
 import {
   type CodexPetPackage,
@@ -283,7 +276,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
 
   const fastController = new FastController(SERVICE_TIER);
   let cachedConfig: ResolvedConfig | undefined;
-  const optionalTools = new Map<"image" | "websearch" | "decisions", OptionalTool>();
+  const optionalTools = new Map<"image" | "websearch", OptionalTool>();
   let footerTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
   let footerInstalled = false;
   let statusInstalled = false;
@@ -465,9 +458,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       `Image default save: ${cfg.image.defaultSave}`,
       `Websearch enabled: ${cfg.websearch.enabled}`,
       `Websearch model: ${cfg.websearch.model} (${cfg.websearch.reasoningEffort}/${cfg.websearch.responseLength}, ${cfg.websearch.maxOutputTokens} tokens, ${cfg.websearch.timeoutMs}ms)`,
-      `Decisions enabled: ${cfg.decisions.enabled}`,
-      `Decision classifier: ${cfg.decisions.model || "not selected"} (${cfg.decisions.timeoutMs}ms)`,
-      "Native OpenAI Decisions requires a registered classifier adapter; no chat fallback.",
+      "Typed decisions: not shipped in this fork (smarty-dev#3155)",
       `Pet enabled: ${cfg.pets.enabled}`,
       `Pet slug: ${cfg.pets.slug || PET_EMPTY_VALUE}`,
       `Pet placement: ${cfg.pets.placement}`,
@@ -987,35 +978,6 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
           ),
       },
       {
-        id: "section.decisions",
-        label: "Typed decisions",
-        currentValue: cfg.decisions.enabled ? cfg.decisions.model || "model required" : "disabled",
-        description: "Opt-in native classifier requests; no chat fallback or automatic actions.",
-        submenu: (_value, done) =>
-          settingsSubmenu(
-            "Typed decision settings",
-            () => {
-              const next = config(ctx);
-              // Only classifiers that passed the shared availability predicate when the
-              // picker opened; a configured-but-unavailable model is labelled, never offered.
-              // evaluateDecision re-checks availability on every request.
-              return settingsItemsFromDescriptors(DECISIONS_SETTING_DESCRIPTORS, next, {
-                "decisions.model": decisionModelPickerOverride(
-                  next.decisions.model,
-                  cachedAvailableClassifierModelKeys(),
-                ),
-              });
-            },
-            ctx,
-            () =>
-              done(
-                config(ctx).decisions.enabled
-                  ? config(ctx).decisions.model || "model required"
-                  : "disabled",
-              ),
-          ),
-      },
-      {
         id: "section.pets",
         label: "Footer pet",
         currentValue: petSettingsSummary(cfg),
@@ -1115,7 +1077,6 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       return;
     }
     await loadSettingsListTheme();
-    await availableClassifiers(ctx.modelRegistry);
     try {
       petController.settingsPets = await listCodexPets();
     } catch {
@@ -1187,7 +1148,6 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
 
   optionalTools.set("image", registerOpenAIImage(pi, config));
   optionalTools.set("websearch", registerOpenAIWebSearch(pi, config));
-  optionalTools.set("decisions", registerOpenAIDecisions(pi, config, refresh));
   if (cachedConfig) syncToolExposure(cachedConfig);
   registerOpenAIPets(pi, {
     wake: async (ctx, slug) => {

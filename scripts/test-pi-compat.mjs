@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,11 +51,32 @@ try {
     noThemes: true,
     noContextFiles: true,
   });
+  // Legacy configs must still load, but cannot re-enable Decisions in this fork.
+  await mkdir(join(home, "extensions"), { recursive: true });
+  await writeFile(
+    join(home, "extensions", "pi-better-openai.json"),
+    JSON.stringify({
+      decisions: {
+        enabled: true,
+        model: "typesafe/jev-latest",
+        timeoutMs: 10000,
+        allowWithoutConfirmation: true,
+      },
+    }),
+  );
   await resourceLoader.reload();
   const loaded = resourceLoader.getExtensions();
   assert.deepEqual(loaded.errors, []);
   assert.deepEqual(loaded.warnings ?? [], []);
   assert.ok(loaded.extensions.length > 0, "manifest entrypoints must load");
+  for (const extension of loaded.extensions) {
+    assert.equal(extension.tools.has("openai_decide"), false, "Decisions tool must not register");
+    assert.equal(
+      extension.commands.has("openai-decisions"),
+      false,
+      "Decisions command must not register",
+    );
+  }
   // Synthetic direct-OpenAI credentials only; never read the user's auth store.
   await writeFile(
     join(home, "auth.json"),
@@ -94,8 +115,7 @@ try {
     false,
     "keep native OpenAI auth and transport (no Decisions adapter is shipped)",
   );
-  // openai_decide selects only from availability (src/decisions.ts availableClassifiers);
-  // the host hides its OpenAI Decisions classifier from ChatGPT OAuth there.
+  // The host hides its OpenAI Decisions classifier from ChatGPT OAuth.
   assert.deepEqual(
     await modelRuntime.getAvailableOfType("classifier", "openai"),
     [],
@@ -143,8 +163,14 @@ try {
       );
     }
   }
+  assert.equal(names.has("openai_decide"), false);
+  assert.equal(
+    session.getAllTools().some((tool) => tool.name === "openai_decide"),
+    false,
+    "Decisions tool must not be installed in the real session",
+  );
   console.log(
-    `${manifest.name}: Pi ${VERSION} warning-free manifest load; ${loaded.extensions.length} extensions, ${names.size} tools registered; OpenAI subscription/API-key auth isolation verified`,
+    `${manifest.name}: Pi ${VERSION} warning-free manifest load; ${loaded.extensions.length} extensions, ${names.size} tools registered; Decisions tool/command absent; OpenAI subscription/API-key auth isolation verified`,
   );
 } finally {
   if (session) {
