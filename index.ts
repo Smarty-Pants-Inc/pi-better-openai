@@ -82,6 +82,7 @@ import { registerOpenAIWebSearch, _websearchTest } from "./src/websearch.ts";
 import {
   availableClassifiers,
   cachedAvailableClassifierModelKeys,
+  decisionModelPickerOverride,
   registerOpenAIDecisions,
 } from "./src/decisions.ts";
 import type { OptionalTool } from "./src/optional-tool.ts";
@@ -996,12 +997,13 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
             () => {
               const next = config(ctx);
               // Only classifiers that passed the shared availability predicate when the
-              // picker opened; evaluateDecision re-checks availability on every request.
-              const models = cachedAvailableClassifierModelKeys();
+              // picker opened; a configured-but-unavailable model is labelled, never offered.
+              // evaluateDecision re-checks availability on every request.
               return settingsItemsFromDescriptors(DECISIONS_SETTING_DESCRIPTORS, next, {
-                "decisions.model": {
-                  values: [...new Set(["", next.decisions.model, ...models])],
-                },
+                "decisions.model": decisionModelPickerOverride(
+                  next.decisions.model,
+                  cachedAvailableClassifierModelKeys(),
+                ),
               });
             },
             ctx,

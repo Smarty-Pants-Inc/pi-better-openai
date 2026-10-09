@@ -21,7 +21,9 @@ import {
   buildDecisionConfirmation,
   cachedAvailableClassifierModelKeys,
   findAvailableClassifier,
-  DECISION_PREVIEW_CHARS,
+  DECISION_PREVIEW_MAX_BYTES,
+  decisionModelPickerOverride,
+  serializeDecisionPreview,
   evaluateDecision,
   registerOpenAIDecisions,
   validateDecisionAnswers,
@@ -242,7 +244,7 @@ describe("native typed decisions", () => {
     const [title, message] = confirm.mock.calls[0]!;
     expect(title).toBe("Send decision request?");
     expect(message).toContain("typesafe/jev-latest");
-    expect(message).toContain(JSON.stringify(input.state, null, 2));
+    expect(message).toContain(JSON.stringify(input, null, 2));
     expect(message).toContain(`${Buffer.byteLength(JSON.stringify(input))} bytes`);
     expect(classify).toHaveBeenCalledExactlyOnceWith(model, input, {
       signal: expect.any(AbortSignal),
@@ -251,17 +253,79 @@ describe("native typed decisions", () => {
     expect(response.isError).toBeUndefined();
   });
 
-  test("confirmation shows the endpoint host and truncates large state previews", () => {
-    const big = { ...input, state: { text: "y".repeat(10_000) } };
+  test("confirmation shows the endpoint host and the complete request, including every question", () => {
+    const tail = "TAIL-MARKER-after-the-old-2000-char-cut";
+    const big = { ...input, state: { text: "y".repeat(10_000), tail } };
     const { message } = buildDecisionConfirmation(
       { provider: "openai", id: "gpt-6-luna", baseUrl: "https://api.openai.com/v1" },
       big,
     );
     expect(message).toContain("openai/gpt-6-luna (api.openai.com)");
-    expect(message).toContain(`truncated to ${DECISION_PREVIEW_CHARS} chars`);
     expect(message).toContain(`${Buffer.byteLength(JSON.stringify(big))} bytes`);
-    expect(message.length).toBeLessThan(DECISION_PREVIEW_CHARS + 1000);
+    expect(message).toContain(JSON.stringify(big, null, 2));
+    expect(message).toContain(tail);
+    expect(message).not.toContain("truncated");
+    for (const q of Object.values(input.questions)) {
+      expect(message).toContain(q.instructions);
+      for (const criterion of Object.values(q.criteria)) expect(message).toContain(criterion);
+    }
+    for (const label of ["environment", "code", "true", "false"])
+      expect(message).toContain(`"${label}"`);
     expect(buildDecisionConfirmation(model, input).message).toContain("provider-defined endpoint");
+  });
+
+  test("invisible characters are escaped in the preview and the sent object is parsed from it", () => {
+    const sneaky = { ...input, state: { note: "ok\u200bhidden\u202e\u2028x \u00e9" } };
+    const preview = serializeDecisionPreview(sneaky);
+    expect(preview).toContain("ok\\u200bhidden\\u202e\\u2028x \u00e9");
+    expect(preview).not.toMatch(/[\u200b\u202e\u2028]/);
+    const { message, request } = buildDecisionConfirmation(model, sneaky);
+    expect(message).toContain(preview);
+    expect(request).toEqual(sneaky);
+  });
+
+  test("the object previewed in the dialog is deep-equal to the object sent", async () => {
+    const { ctx, cfg, classify, confirm } = harness();
+    const nested = {
+      ...input,
+      state: { list: [1, { a: "b\u200b" }], unicode: "éè😀", nil: null, flag: false },
+    };
+    await evaluateDecision(ctx, cfg, nested);
+    const message = confirm.mock.calls[0]![1];
+    const start = message.indexOf("\n{") + 1;
+    const end = message.lastIndexOf("\n}") + 2;
+    const previewed = JSON.parse(message.slice(start, end));
+    expect(classify).toHaveBeenCalledOnce();
+    const sent = (classify.mock.calls[0] as unknown as [unknown, unknown])[1];
+    expect(sent).toEqual(previewed);
+    expect(sent).toEqual(nested);
+  });
+
+  test("a request too large to preview completely is refused and nothing is sent", async () => {
+    const { ctx, cfg, classify, confirm } = harness();
+    const big = { ...input, state: { text: "z".repeat(DECISION_PREVIEW_MAX_BYTES) } };
+    expect(() => buildDecisionConfirmation(model, big)).toThrow(/too large to preview/);
+    const response = await evaluateDecision(ctx, cfg, big);
+    expect(response.isError).toBe(true);
+    expect(response.structuredContent).toMatchObject({
+      status: "error",
+      error: expect.stringMatching(/too large to preview.*reduce state/),
+    });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(classify).not.toHaveBeenCalled();
+  });
+
+  test("settings picker offers only available classifiers", () => {
+    const available = ["typesafe/jev-latest"];
+    expect(decisionModelPickerOverride("typesafe/jev-latest", available)).toEqual({
+      currentValue: "typesafe/jev-latest",
+      values: ["", "typesafe/jev-latest"],
+    });
+    const stale = decisionModelPickerOverride("openai/gpt-6-luna", available);
+    expect(stale.values).toEqual(["", "typesafe/jev-latest"]);
+    expect(stale.values).not.toContain("openai/gpt-6-luna");
+    expect(stale.currentValue).toBe("openai/gpt-6-luna (unavailable)");
+    expect(decisionModelPickerOverride("", [])).toEqual({ currentValue: "", values: [""] });
   });
 
   test("without a UI, refuses by default and sends only with allowWithoutConfirmation", async () => {

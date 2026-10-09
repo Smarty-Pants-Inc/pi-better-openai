@@ -281,7 +281,49 @@ export async function findAvailableClassifier(
   );
 }
 
-export const DECISION_PREVIEW_CHARS = 2000;
+/**
+ * Settings-picker values for the classifier model: only classifiers from the last
+ * availability result are selectable. A configured-but-unavailable model is shown as
+ * "(unavailable)" in the current value but is never offered as a value.
+ */
+export function decisionModelPickerOverride(
+  configured: string,
+  available: readonly string[],
+): { currentValue: string; values: string[] } {
+  const values = [...new Set(["", ...available.filter((key) => key)])];
+  return {
+    currentValue:
+      configured && !values.includes(configured) ? `${configured} (unavailable)` : configured,
+    values,
+  };
+}
+
+/** Largest complete request (as displayed) that can be confirmed; larger requests are refused. */
+export const DECISION_PREVIEW_MAX_BYTES = 16 * 1024;
+
+// Characters that would be invisible or reorder text in a terminal dialog. They can only
+// occur inside JSON strings (structural whitespace is " " and "\n"), so escaping them keeps
+// the preview valid JSON that parses back to the identical request.
+const HIDDEN_CHARS = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\p{Zs}]/gu;
+
+function escapeHidden(json: string): string {
+  return json.replace(HIDDEN_CHARS, (match) =>
+    match === " " || match === "\n"
+      ? match
+      : Array.from(
+          { length: match.length },
+          (_, i) => `\\u${match.charCodeAt(i).toString(16).padStart(4, "0")}`,
+        ).join(""),
+  );
+}
+
+/**
+ * Serializes the complete classifier request exactly as previewed. The object sent to the
+ * classifier must be parsed back from this text so no undisplayed bytes leave the machine.
+ */
+export function serializeDecisionPreview(request: ClassifierContext): string {
+  return escapeHidden(JSON.stringify(request, null, 2));
+}
 
 function endpointHost(baseUrl: unknown): string {
   if (typeof baseUrl !== "string" || !baseUrl) return "provider-defined endpoint";
@@ -292,26 +334,34 @@ function endpointHost(baseUrl: unknown): string {
   }
 }
 
-/** Builds the per-call egress confirmation shown before any decision request leaves the machine. */
+/**
+ * Builds the per-call egress confirmation shown before any decision request leaves the
+ * machine. The message contains the COMPLETE request (state and every question with its
+ * instructions and criteria); `request` is the object parsed back from that preview and is
+ * the only object that may be sent. Requests too large to preview in full are refused
+ * rather than truncated.
+ */
 export function buildDecisionConfirmation(
   model: { provider: string; id: string; baseUrl?: unknown },
   request: ClassifierContext,
-): { title: string; message: string } {
-  const state = JSON.stringify(request.state, null, 2);
-  const size = Buffer.byteLength(JSON.stringify(request), "utf8");
-  const truncated = state.length > DECISION_PREVIEW_CHARS;
-  const preview = truncated ? `${state.slice(0, DECISION_PREVIEW_CHARS)}\n…` : state;
-  const questions = Object.keys(request.questions);
+): { title: string; message: string; request: ClassifierContext } {
+  const preview = serializeDecisionPreview(request);
+  requireDecision(
+    Buffer.byteLength(preview, "utf8") <= DECISION_PREVIEW_MAX_BYTES,
+    `Decision request too large to preview (over ${DECISION_PREVIEW_MAX_BYTES / 1024} KiB); reduce state. Nothing was sent.`,
+  );
+  const sent = JSON.parse(preview) as ClassifierContext;
+  const size = Buffer.byteLength(JSON.stringify(sent), "utf8");
   return {
     title: "Send decision request?",
     message: [
       `Destination: ${model.provider}/${model.id} (${endpointHost(model.baseUrl)})`,
-      `Total request size: ${size} bytes${truncated ? ` (preview truncated to ${DECISION_PREVIEW_CHARS} chars)` : ""}`,
-      `Questions (${questions.length}): ${questions.join(", ").slice(0, 500)}`,
-      "State to be sent:",
+      `Total request size: ${size} bytes`,
+      "Complete request to be sent (state and questions):",
       preview,
       "Decline if this contains secrets or data that must not leave this machine.",
     ].join("\n"),
+    request: sent,
   };
 }
 
@@ -349,12 +399,14 @@ export async function evaluateDecision(
       model,
       "The configured native classifier is unavailable. Inspect /openai-decisions models; no chat fallback is used.",
     );
-    const request = validateDecisionRequest(input);
+    let request = validateDecisionRequest(input);
     requireDecision(!controller.signal.aborted, "Decision request aborted.");
     // Single egress choke point for every classifier: the model controls `state`,
     // so each request needs explicit user consent (or an explicit headless opt-in).
     if (ctx.hasUI) {
       const confirmation = buildDecisionConfirmation(model, request);
+      // Send exactly the object parsed from the previewed text, nothing else.
+      request = confirmation.request;
       const accepted = await ctx.ui.confirm(confirmation.title, confirmation.message, {
         signal: controller.signal,
       });
