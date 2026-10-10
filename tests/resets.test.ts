@@ -148,6 +148,7 @@ async function createResetsHarness(config: Record<string, unknown> = {}): Promis
   ctx: ExtensionContext;
   commands: Map<string, { handler: CommandHandler }>;
   handlers: Map<string, EventHandler[]>;
+  announceService: (service: unknown) => void;
 }> {
   const cwd = createTempDir("pi-better-openai-resets-project-");
   const agentDir = createTempDir("pi-better-openai-resets-agent-");
@@ -159,7 +160,13 @@ async function createResetsHarness(config: Record<string, unknown> = {}): Promis
 
   const handlers = new Map<string, EventHandler[]>();
   const commands = new Map<string, { handler: CommandHandler }>();
+  const bridgeHandlers = new Map<string, (service: unknown) => void>();
   const pi = {
+    events: {
+      on: (event: string, handler: (service: unknown) => void) => {
+        bridgeHandlers.set(event, handler);
+      },
+    },
     on(event: string, handler: EventHandler) {
       const currentHandlers = handlers.get(event) ?? [];
       currentHandlers.push(handler);
@@ -203,7 +210,14 @@ async function createResetsHarness(config: Record<string, unknown> = {}): Promis
   } as unknown as ExtensionContext;
 
   betterOpenAI(pi);
-  return { ctx, commands, handlers };
+  return {
+    ctx,
+    commands,
+    handlers,
+    announceService: (service) => {
+      bridgeHandlers.get("pi-multiprovider:service")?.(service);
+    },
+  };
 }
 
 function credit(overrides: Partial<BankedResetCredit> = {}): BankedResetCredit {
@@ -526,7 +540,7 @@ describe("/openai-resets command", () => {
     vi.mocked(ctx.ui.confirm).mockResolvedValue(true);
 
     await commands.get("openai-resets")?.handler("", ctx);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
 
     expect(ctx.ui.select).not.toHaveBeenCalled();
     const posts = consumeCalls(fetchMock);
@@ -581,7 +595,7 @@ describe("/openai-resets command", () => {
     vi.mocked(ctx.ui.select).mockImplementation(async (_title, options) => options[1]);
 
     await commands.get("openai-resets")?.handler("", ctx);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
 
     const [title, options] = vi.mocked(ctx.ui.select).mock.calls[0] as unknown as [
       string,
@@ -602,6 +616,72 @@ describe("/openai-resets command", () => {
   });
 });
 
+test("A confirmation open then switch to B makes zero B reservations or consume requests", async () => {
+  const fetchMock = stubResetsFetch();
+  const harness = await createResetsHarness({ usage: { autoRedeemBankedResets: false } });
+  const { setActiveMultiproviderService } = await import("../src/multiprovider.ts");
+  const guard = await import("../src/reset-guard.ts");
+  const reserve = vi.spyOn(guard, "reserveBankedResetRedemption");
+  let active = { id: "slot_A", label: "Shared", authKind: "oauth" };
+  type Service = import("../src/multiprovider.ts").MultiproviderService;
+  const listeners = new Map<string, Set<Parameters<Service["onActiveAccountChanged"]>[1]>>();
+  const service: Service = {
+    getActiveAccount: async (provider) => (provider === "openai-codex" ? active : undefined),
+    resolveActiveAccountAuth: async (provider, ctx) => {
+      const pin = await service.getActiveAccount(provider, ctx);
+      if (!pin) return undefined;
+      const accountId = pin.id === "slot_A" ? "acct_A" : "acct_B";
+      return {
+        accessToken: `e30.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } })).toString("base64url")}.sig`,
+        label: pin.label,
+        source: "oauth",
+      };
+    },
+    onActiveAccountChanged: (provider, callback) => {
+      const callbacks = listeners.get(provider) ?? new Set();
+      listeners.set(provider, callbacks);
+      callbacks.add(callback);
+      return () => {
+        callbacks.delete(callback);
+      };
+    },
+  };
+  harness.announceService(service);
+  let opened!: () => void;
+  const confirmationOpen = new Promise<void>((resolve) => {
+    opened = resolve;
+  });
+  let confirm!: (accepted: boolean) => void;
+  vi.mocked(harness.ctx.ui.confirm).mockImplementation(() => {
+    opened();
+    return new Promise<boolean>((resolve) => {
+      confirm = resolve;
+    });
+  });
+  try {
+    const command = harness.commands.get("openai-resets")!.handler("", harness.ctx);
+    await confirmationOpen;
+    active = { ...active, id: "slot_B" };
+    for (const callback of listeners.get("openai-codex") ?? [])
+      callback({ providerId: "openai-codex", account: active, ctx: harness.ctx });
+    // Let the real switch callback replace the controller cache with B while
+    // the dialog still holds A's credit. Confirmation must retain A's identity.
+    await settleAsyncWork();
+    confirm(true);
+    await command;
+    await settleAsyncWork();
+    expect(reserve).not.toHaveBeenCalled();
+    expect(consumeCalls(fetchMock)).toHaveLength(0);
+    expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("selected account changed"),
+      "error",
+    );
+  } finally {
+    reserve.mockRestore();
+    await emit(harness, "session_shutdown");
+    setActiveMultiproviderService(undefined);
+  }
+}, 15_000);
 describe("automatic reset extension wiring", () => {
   test.each([true, false])(
     "default on and opt-out (%s), even without usage display or an OpenAI model",
@@ -714,7 +794,8 @@ describe("ResetController caching", () => {
     await controller.refresh(controllerCtx());
 
     expect(controller.snapshot).toBeUndefined();
-    expect(controller.lastError).toContain("credentials unavailable");
+    expect(controller.lastError).toContain("Missing openai-codex OAuth credentials");
+    expect(controller.lastError).toContain("/login openai uses separate");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

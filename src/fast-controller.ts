@@ -3,7 +3,7 @@ import type { ResolvedConfig, ServiceTier, SupportedModel } from "./config.ts";
 import { isRecord } from "./config.ts";
 
 export const ULTRAFAST_NOTICE =
-  "Ultrafast uses 6x Standard token prices for API GPT-6 Astra (global/US only). Codex subscription access is not verified. Host cost estimates may exclude tier premiums.";
+  "Ultrafast uses 6x Standard token prices for API GPT-6 Astra (global/US only). ChatGPT subscription access (openai OAuth or legacy openai-codex) is not verified. Host cost estimates may exclude tier premiums.";
 
 export function currentModelKey(ctx: ExtensionContext): string {
   return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none";
@@ -22,7 +22,8 @@ export function supportsUltrafast(ctx: ExtensionContext): boolean {
   if (
     model?.provider !== "openai" ||
     model.id !== "gpt-6-astra" ||
-    model.api !== "openai-responses"
+    model.api !== "openai-responses" ||
+    ctx.modelRegistry.isUsingOAuth(model)
   )
     return false;
   try {

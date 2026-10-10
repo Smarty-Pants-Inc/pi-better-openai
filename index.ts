@@ -1,7 +1,7 @@
 /**
  * Better OpenAI for pi.
  *
- * Adds capability-gated OpenAI service tiers and opt-in native typed decisions.
+ * Adds capability-gated OpenAI service tiers and subscription workflow tools.
  */
 import {
   type ExtensionAPI,
@@ -20,7 +20,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { registerOpenAICodexModels } from "./src/codex-models.ts";
 import { CONFIG_BASENAME, STATUS_KEY } from "./src/identity.ts";
 import {
-  CODEX_PROVIDER_ID,
+  CHATGPT_PROVIDER_IDS,
   isMultiproviderService,
   MULTIPROVIDER_SERVICE_EVENT,
   setActiveMultiproviderService,
@@ -47,7 +47,6 @@ import {
   WEBSEARCH_SETTING_DESCRIPTORS,
   PET_SETTING_DESCRIPTORS,
   FAST_SETTING_DESCRIPTORS,
-  DECISIONS_SETTING_DESCRIPTORS,
   isServiceTier,
   type SettingsOptionDescriptor,
   configPaths,
@@ -79,7 +78,7 @@ import {
 import { ResetController } from "./src/reset-controller.ts";
 import { registerOpenAIImage, _imageTest } from "./src/image.ts";
 import { registerOpenAIWebSearch, _websearchTest } from "./src/websearch.ts";
-import { registerOpenAIDecisions } from "./src/decisions.ts";
+import type { OptionalTool } from "./src/optional-tool.ts";
 import {
   type CodexPetPackage,
   codexHome,
@@ -277,6 +276,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
 
   const fastController = new FastController(SERVICE_TIER);
   let cachedConfig: ResolvedConfig | undefined;
+  const optionalTools = new Map<"image" | "websearch", OptionalTool>();
   let footerTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
   let footerInstalled = false;
   let statusInstalled = false;
@@ -300,7 +300,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   let unsubscribeMultiprovider: (() => void) | undefined;
   let multiproviderRefreshCtx: ExtensionContext | undefined;
 
-  // Follow pi-multiprovider's active pooled account for openai-codex. The
+  // Follow both ChatGPT pools: either selection can change the permitted backend identity. The
   // event re-fires with the same stable object at load and session start; the
   // identity check keeps the change subscription attached exactly once. When
   // the extension is absent, nothing here activates and credential resolution
@@ -311,21 +311,37 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       unsubscribeMultiprovider?.();
       multiproviderService = value;
       setActiveMultiproviderService(value);
-      unsubscribeMultiprovider = value.onActiveAccountChanged(CODEX_PROVIDER_ID, (event) => {
-        void usageController.refresh(event.ctx, undefined, { force: true });
-        void resetController.refresh(event.ctx, { force: true }).catch(() => {});
-        updateFooter(event.ctx);
-      });
+      const unsubscribers = CHATGPT_PROVIDER_IDS.map((providerId) =>
+        value.onActiveAccountChanged(providerId, (event) => {
+          // The real bridge iterates a live listener Set. Start resolutions after
+          // delivery so their temporary listeners do not see this already-applied
+          // switch as a new change during their pin/auth window.
+          queueMicrotask(() => {
+            void usageController.refresh(event.ctx, undefined, { force: true });
+            void resetController.refresh(event.ctx, { force: true }).catch(() => {});
+            updateFooter(event.ctx);
+          });
+        }),
+      );
+      unsubscribeMultiprovider = () => {
+        for (const unsubscribe of unsubscribers) unsubscribe();
+      };
       const ctx = multiproviderRefreshCtx;
       if (ctx) {
         void usageController.refresh(ctx, undefined, { force: true });
+        void resetController.refresh(ctx, { force: true }).catch(() => {});
         updateFooter(ctx);
       }
     });
   }
 
+  function syncToolExposure(cfg: ResolvedConfig): void {
+    for (const [feature, tool] of optionalTools) tool.setEnabled(cfg[feature].enabled);
+  }
+
   function refresh(ctx: ExtensionContext): ResolvedConfig {
     cachedConfig = resolveConfig(ctx.cwd || process.cwd());
+    syncToolExposure(cachedConfig);
     return cachedConfig;
   }
 
@@ -442,9 +458,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       `Image default save: ${cfg.image.defaultSave}`,
       `Websearch enabled: ${cfg.websearch.enabled}`,
       `Websearch model: ${cfg.websearch.model} (${cfg.websearch.reasoningEffort}/${cfg.websearch.responseLength}, ${cfg.websearch.maxOutputTokens} tokens, ${cfg.websearch.timeoutMs}ms)`,
-      `Decisions enabled: ${cfg.decisions.enabled}`,
-      `Decision classifier: ${cfg.decisions.model || "not selected"} (${cfg.decisions.timeoutMs}ms)`,
-      "Native OpenAI Decisions requires a registered classifier adapter; no chat fallback.",
+      "Typed decisions: not shipped in this fork (smarty-dev#3155)",
       `Pet enabled: ${cfg.pets.enabled}`,
       `Pet slug: ${cfg.pets.slug || PET_EMPTY_VALUE}`,
       `Pet placement: ${cfg.pets.placement}`,
@@ -470,16 +484,19 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       ctx.ui.notify("/openai-resets requires an interactive TUI session.", "warning");
       return;
     }
-    let credits = resetController.snapshot?.credits;
-    if (!credits) {
+    let snapshot = resetController.snapshot;
+    if (!snapshot) {
       await resetController.refresh(ctx, { force: true }).catch(() => {});
-      credits = resetController.snapshot?.credits;
+      snapshot = resetController.snapshot;
     }
-    if (!credits) {
+    if (!snapshot) {
       const reason = resetController.lastError;
       ctx.ui.notify(`Banked reset lookup failed${reason ? `: ${reason}` : "."}`, "error");
       return;
     }
+    // Keep the original cache identity across picker/confirmation awaits, even
+    // if a switch callback refreshes the controller to another account.
+    const { credits, credentials } = snapshot;
     void resetController.refresh(ctx).catch(() => {});
     if (credits.availableCount <= 0) {
       ctx.ui.notify("No banked Codex resets are available for this account.", "info");
@@ -516,7 +533,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       return;
     }
     try {
-      const result = await resetController.redeem(ctx, selected.id);
+      const result = await resetController.redeem(ctx, selected.id, credentials);
       const outcome = formatConsumeOutcome(result);
       ctx.ui.notify(outcome.message, outcome.level);
       void usageController.refresh(ctx, ctx.model?.id, { force: true });
@@ -961,38 +978,6 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
           ),
       },
       {
-        id: "section.decisions",
-        label: "Typed decisions",
-        currentValue: cfg.decisions.enabled ? cfg.decisions.model || "model required" : "disabled",
-        description: "Opt-in native classifier requests; no chat fallback or automatic actions.",
-        submenu: (_value, done) =>
-          settingsSubmenu(
-            "Typed decision settings",
-            () => {
-              const next = config(ctx);
-              const models = ctx.modelRegistry.getModelsOfType("classifier");
-              return settingsItemsFromDescriptors(DECISIONS_SETTING_DESCRIPTORS, next, {
-                "decisions.model": {
-                  values: [
-                    ...new Set([
-                      "",
-                      next.decisions.model,
-                      ...models.map((model) => `${model.provider}/${model.id}`),
-                    ]),
-                  ],
-                },
-              });
-            },
-            ctx,
-            () =>
-              done(
-                config(ctx).decisions.enabled
-                  ? config(ctx).decisions.model || "model required"
-                  : "disabled",
-              ),
-          ),
-      },
-      {
         id: "section.pets",
         label: "Footer pet",
         currentValue: petSettingsSummary(cfg),
@@ -1161,9 +1146,9 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     },
   });
 
-  registerOpenAIImage(pi, config);
-  registerOpenAIWebSearch(pi, config);
-  registerOpenAIDecisions(pi, config, refresh);
+  optionalTools.set("image", registerOpenAIImage(pi, config));
+  optionalTools.set("websearch", registerOpenAIWebSearch(pi, config));
+  if (cachedConfig) syncToolExposure(cachedConfig);
   registerOpenAIPets(pi, {
     wake: async (ctx, slug) => {
       const pets = await listCodexPets();

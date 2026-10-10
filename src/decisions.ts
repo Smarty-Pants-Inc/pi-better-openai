@@ -1,6 +1,8 @@
 import {
   Type,
+  type ClassifierApi,
   type ClassifierContext,
+  type ClassifierModel,
   type ClassifierResult,
   type Static,
 } from "@earendil-works/pi-ai";
@@ -13,6 +15,7 @@ import {
   type DecisionsConfig,
   type ResolvedConfig,
 } from "./config.ts";
+import { registerOptionalTool, type OptionalTool } from "./optional-tool.ts";
 
 export const OPENAI_DECIDE_TOOL = "openai_decide";
 export const OPENAI_DECISIONS_COMMAND = "openai-decisions";
@@ -237,6 +240,139 @@ export function validateDecisionAnswers(
   return clean;
 }
 
+type ClassifierRegistry = Pick<ExtensionContext["modelRegistry"], "getAvailableOfType">;
+let cachedAvailableClassifierKeys: string[] = [];
+
+/**
+ * The single availability predicate for decisions: only classifiers the host reports
+ * as usable with the current credentials (e.g. Pi hides OpenAI Decisions from OAuth
+ * credentials only in availability, not in the raw catalog). Fails closed on hosts
+ * without the classifier API or on lookup errors.
+ */
+export async function availableClassifiers(
+  registry: Partial<ClassifierRegistry>,
+  signal?: AbortSignal,
+): Promise<readonly ClassifierModel<ClassifierApi>[]> {
+  let models: readonly ClassifierModel<ClassifierApi>[] = [];
+  if (typeof registry.getAvailableOfType === "function") {
+    try {
+      models = await registry.getAvailableOfType("classifier", undefined, { signal });
+    } catch {
+      models = [];
+    }
+  }
+  cachedAvailableClassifierKeys = models.map((m) => `${m.provider}/${m.id}`);
+  return models;
+}
+
+/** Last availability result, for synchronous UI pickers. Selection is re-checked at use. */
+export function cachedAvailableClassifierModelKeys(): readonly string[] {
+  return cachedAvailableClassifierKeys;
+}
+
+export async function findAvailableClassifier(
+  registry: Partial<ClassifierRegistry>,
+  provider: string,
+  id: string,
+  signal?: AbortSignal,
+): Promise<ClassifierModel<ClassifierApi> | undefined> {
+  return (await availableClassifiers(registry, signal)).find(
+    (m) => m.provider === provider && m.id === id,
+  );
+}
+
+/**
+ * Settings-picker values for the classifier model: only classifiers from the last
+ * availability result are selectable. A configured-but-unavailable model is shown as
+ * "(unavailable)" in the current value but is never offered as a value.
+ */
+export function decisionModelPickerOverride(
+  configured: string,
+  available: readonly string[],
+): { currentValue: string; values: string[] } {
+  const values = [...new Set(["", ...available.filter((key) => key)])];
+  return {
+    currentValue:
+      configured && !values.includes(configured) ? `${configured} (unavailable)` : configured,
+    values,
+  };
+}
+
+/**
+ * Largest complete request that can be confirmed, measured on the escaped (pure ASCII)
+ * preview as displayed; larger requests are refused.
+ */
+export const DECISION_PREVIEW_MAX_BYTES = 16 * 1024;
+
+// Every UTF-16 code unit outside printable ASCII (U+0020-U+007E), except the "\n" used for
+// pretty-print layout. JSON.stringify already escapes "\n" inside strings, so a raw "\n" is
+// always layout; everything else matched can only occur inside JSON strings.
+const NON_PRINTABLE_ASCII = /[^\x20-\x7E\n]/g;
+
+/**
+ * Escapes every matched code unit as `\uXXXX` (astral code points become two surrogate
+ * escapes, as JSON allows), so the preview is pure printable ASCII and still valid JSON that
+ * parses back to the identical request.
+ */
+export function toPrintableAscii(text: string, pattern: RegExp = NON_PRINTABLE_ASCII): string {
+  return text.replace(pattern, (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
+// Configured metadata (provider, model id, host) is one display line: escape "\n" too, so it
+// cannot split or spoof the dialog's layout lines.
+const NON_PRINTABLE_ASCII_LINE = /[^\x20-\x7E]/g;
+
+/**
+ * Serializes the complete classifier request exactly as previewed. The object sent to the
+ * classifier must be parsed back from this text so no undisplayed bytes leave the machine.
+ */
+export function serializeDecisionPreview(request: ClassifierContext): string {
+  return toPrintableAscii(JSON.stringify(request, null, 2));
+}
+
+function endpointHost(baseUrl: unknown): string {
+  if (typeof baseUrl !== "string" || !baseUrl) return "provider-defined endpoint";
+  try {
+    return new URL(baseUrl).host || "provider-defined endpoint";
+  } catch {
+    return "provider-defined endpoint";
+  }
+}
+
+/**
+ * Builds the per-call egress confirmation shown before any decision request leaves the
+ * machine. The message contains the COMPLETE request (state and every question with its
+ * instructions and criteria); `request` is the object parsed back from that preview and is
+ * the only object that may be sent. Requests too large to preview in full are refused
+ * rather than truncated.
+ */
+export function buildDecisionConfirmation(
+  model: { provider: string; id: string; baseUrl?: unknown },
+  request: ClassifierContext,
+): { title: string; message: string; request: ClassifierContext } {
+  const preview = serializeDecisionPreview(request);
+  requireDecision(
+    Buffer.byteLength(preview, "utf8") <= DECISION_PREVIEW_MAX_BYTES,
+    `Decision request too large to preview (over ${DECISION_PREVIEW_MAX_BYTES / 1024} KiB); reduce state. Nothing was sent.`,
+  );
+  const sent = JSON.parse(preview) as ClassifierContext;
+  const size = Buffer.byteLength(JSON.stringify(sent), "utf8");
+  return {
+    title: "Send decision request?",
+    message: [
+      toPrintableAscii(
+        `Destination: ${model.provider}/${model.id} (${endpointHost(model.baseUrl)})`,
+        NON_PRINTABLE_ASCII_LINE,
+      ),
+      `Total request size: ${size} bytes`,
+      "Complete request to be sent (state and questions):",
+      preview,
+      "Decline if this contains secrets or data that must not leave this machine.",
+    ].join("\n"),
+    request: sent,
+  };
+}
+
 export async function evaluateDecision(
   ctx: ExtensionContext,
   cfg: ResolvedConfig,
@@ -260,13 +396,36 @@ export async function evaluateDecision(
       key,
       "Select an explicit native classifier with /openai-decisions use provider/model.",
     );
-    const model = ctx.modelRegistry.getModelOfType("classifier", key.provider, key.id);
+    const model = await findAvailableClassifier(
+      ctx.modelRegistry,
+      key.provider,
+      key.id,
+      controller.signal,
+    );
+    requireDecision(!controller.signal.aborted, "Decision request aborted.");
     requireDecision(
       model,
-      "The configured native classifier is unavailable. No OpenAI endpoint or chat fallback is assumed; inspect /openai-decisions models.",
+      "The configured native classifier is unavailable. Inspect /openai-decisions models; no chat fallback is used.",
     );
-    const request = validateDecisionRequest(input);
+    let request = validateDecisionRequest(input);
     requireDecision(!controller.signal.aborted, "Decision request aborted.");
+    // Single egress choke point for every classifier: the model controls `state`,
+    // so each request needs explicit user consent (or an explicit headless opt-in).
+    if (ctx.hasUI) {
+      const confirmation = buildDecisionConfirmation(model, request);
+      // Send exactly the object parsed from the previewed text, nothing else.
+      request = confirmation.request;
+      const accepted = await ctx.ui.confirm(confirmation.title, confirmation.message, {
+        signal: controller.signal,
+      });
+      requireDecision(!controller.signal.aborted, "Decision request aborted.");
+      requireDecision(accepted === true, "Decision request declined by user; nothing was sent.");
+    } else {
+      requireDecision(
+        cfg.decisions.allowWithoutConfirmation === true,
+        "Decision request refused: no UI is available to confirm it. Set decisions.allowWithoutConfirmation to true to allow unattended requests.",
+      );
+    }
     const cancelled = new Promise<never>((_resolve, reject) => {
       abortListener = () =>
         reject(
@@ -278,7 +437,7 @@ export async function evaluateDecision(
     });
     timer = setTimeout(abort, cfg.decisions.timeoutMs);
     result = await Promise.race([
-      ctx.modelRegistry.classify(model, request, { signal: controller.signal }),
+      ctx.modelRegistry.classify(model, request, { signal: controller.signal, maxRetries: 0 }),
       cancelled,
     ]);
     requireDecision(
@@ -335,7 +494,7 @@ export function registerOpenAIDecisions(
   pi: ExtensionAPI,
   getConfig: (ctx: ExtensionContext) => ResolvedConfig,
   refreshConfig: (ctx: ExtensionContext) => ResolvedConfig,
-): void {
+): OptionalTool {
   function save(ctx: ExtensionContext, patch: DecisionsConfig): void {
     const cfg = refreshConfig(ctx);
     const raw = readRawConfig(cfg.configPath);
@@ -343,7 +502,7 @@ export function registerOpenAIDecisions(
       ...raw,
       decisions: { ...(isRecord(raw.decisions) ? raw.decisions : {}), ...patch },
     });
-    refreshConfig(ctx);
+    tool.setEnabled(refreshConfig(ctx).decisions.enabled);
   }
 
   pi.registerCommand(OPENAI_DECISIONS_COMMAND, {
@@ -354,19 +513,19 @@ export function registerOpenAIDecisions(
         save(ctx, { enabled: false });
         ctx.ui.notify("Decision requests disabled.", "info");
       } else if (arg === "models") {
-        const models = ctx.modelRegistry.getModelsOfType("classifier");
+        const models = await availableClassifiers(ctx.modelRegistry);
         ctx.ui.notify(
           models.length
             ? models.map((m) => `${m.provider}/${m.id}`).join("\n") +
-                "\nCatalog entries do not guarantee credentials or entitlement."
-            : "No native classifiers registered. No OpenAI Decisions endpoint is assumed.",
+                "\nAvailable with current credentials; account entitlement is not guaranteed."
+            : "No native classifiers available with the current credentials.",
           "info",
         );
       } else if (arg.startsWith("use ")) {
         const key = parseModelKey(arg.slice(4));
-        if (!key || !ctx.modelRegistry.getModelOfType("classifier", key.provider, key.id)) {
+        if (!key || !(await findAvailableClassifier(ctx.modelRegistry, key.provider, key.id))) {
           ctx.ui.notify(
-            "Unknown native classifier. Use /openai-decisions models; chat models are not accepted.",
+            "Unknown or unavailable native classifier. Use /openai-decisions models; chat models and classifiers unavailable with the current credentials are not accepted.",
             "error",
           );
           return;
@@ -380,7 +539,7 @@ export function registerOpenAIDecisions(
       } else if (!arg) {
         const cfg = getConfig(ctx).decisions;
         ctx.ui.notify(
-          `Decisions: ${cfg.enabled ? "enabled" : "disabled"}; model: ${cfg.model || "not selected"}; timeout: ${cfg.timeoutMs}ms.\n/openai-decisions models | use provider/model | off\nOpenAI native Decisions requires a published classifier adapter in Pi; no endpoint is guessed.`,
+          `Decisions: ${cfg.enabled ? "enabled" : "disabled"}; model: ${cfg.model || "not selected"}; timeout: ${cfg.timeoutMs}ms.\n/openai-decisions models | use provider/model | off\nThis extension does not ship an OpenAI Decisions adapter; only host classifiers available with the current credentials are listed.`,
           "info",
         );
       } else {
@@ -388,11 +547,11 @@ export function registerOpenAIDecisions(
       }
     },
   });
-  pi.registerTool({
+  const tool = registerOptionalTool(pi, {
     name: OPENAI_DECIDE_TOOL,
     label: "Typed decision",
     description:
-      "Answer bounded choice, bool, or score questions using the user's explicitly configured native classifier. Disabled until opt-in. Supports Pi classifier providers (including Jev); OpenAI requires a native adapter. Never uses a chat fallback or executes decisions.",
+      "Answer bounded choice, bool, or score questions using the user's explicitly configured native classifier. Disabled until opt-in. Supports Pi classifier providers registered by the host (including Jev). Never uses a chat fallback or executes decisions.",
     parameters: DECISION_PARAMETERS,
     outputSchema: DECISION_OUTPUT,
     promptGuidelines: [
@@ -402,4 +561,5 @@ export function registerOpenAIDecisions(
     execute: (_id, params, signal, _onUpdate, ctx) =>
       evaluateDecision(ctx, getConfig(ctx), params, signal),
   });
+  return tool;
 }

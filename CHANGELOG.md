@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased (Smarty fork)
+
+- **Typed decisions are disabled in this fork** (smarty-dev#3155): `openai_decide`, `/openai-decisions` and the Typed decisions settings section are not registered, because Pi's confirmation UI cannot yet show a complete request safely. Legacy `decisions.*` settings still load and have no effect.
+- Do not ship upstream's native OpenAI Decisions compatibility adapter (smarty-dev#3155).
+- The unregistered decisions module (`src/decisions.ts`) stays in the repository but is **not published** in the package (`files` excludes it), so no consumer can import it and re-register the tool. It keeps a per-call confirmation that previews the complete request or refuses it (interactive sessions only; the headless opt-in `decisions.allowWithoutConfirmation: true` skips it), and a credential-availability filter, for when the feature returns.
+
+## 0.2.13
+
+_Historical upstream release notes. In this fork, typed decisions are disabled (see Unreleased)._
+
+- Add a native OpenAI Decisions compatibility classifier for hosts without upstream support, preserving OpenAI chat/auth and deferring to the host adapter when available.
+- Support typed predicates, choices, scores, inline images, cancellation, hooks, HTTP retries, and input-only usage accounting through native codemode and pi-fabric.
+- Keep the bounded decision tool opt-in, explicitly disable its provider retries, and verify real-host codemode with offline HTTP fixtures.
+- Upgrade sharp and pin patched source-map-js/tinypool dependencies to resolve high/critical security advisories.
+
+## 0.2.12
+
+- Validate against Pi 1.0.2, where `openai` supports ChatGPT subscription OAuth and `openai-codex` is labeled legacy; preserve the native OpenAI provider and transport.
+- Keep Ultrafast API-only: do not inject it for the new OpenAI subscription login, and retain Standard/Fast behavior.
+- Label separately authenticated Codex usage on OpenAI models and warn that it is not verified against the active OpenAI account.
+- Clarify that usage, banked resets, images, and web search still need `/login openai-codex`; never substitute direct-OpenAI OAuth credentials for Codex backend auth.
+- Add auth-boundary regressions and an isolated real-host subscription/API-key compatibility probe.
+- With pi-multiprovider, bind selected Codex auth to the pool slot the bridge used, re-arm automatic reset redemption after account switches, and send the verified slot's current token.
+
+## 0.2.11
+
+- Auto-redeem banked Codex resets ten minutes before expiry instead of one minute, with matching settings and redemption-time displays.
+- Preserve the scheduled credit across polling refreshes so the longer lead retains the no-fallback safeguard.
+- Extend the shared redemption cooldown to ten minutes and add regression coverage for exact timing and startup inside the redemption window.
+
+## 0.2.10
+
+- Hide disabled image, web search, and decision tools and their prompt guidance, including from pi-fabric capture.
+- Apply settings and decision-command toggles immediately without reactivating unrelated tools; retain execution guards and configuration commands.
+- Add real Pi regression coverage for startup, live toggles, nested-call availability, and prompt updates.
+- Update brace-expansion to 5.0.11 and undici to 8.10.2 to resolve high-severity security advisories.
+
 ## 0.2.9
 
 - Validate Pi 1.0.0 with exact development pins and wildcard host peers.
