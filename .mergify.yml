@@ -13,6 +13,7 @@ queue_rules:
     checks_timeout: 30 min
     merge_method: merge
     queue_conditions:
+      - -check-failure = review/security  # a failed security verdict refuses admission, label or not
       - base = main
       - -draft
       - -label = hold
@@ -30,6 +31,7 @@ queue_rules:
       - check-success = check (22.19.0)
       - check-success = check (24)
     merge_conditions:
+      - -check-failure = review/security  # a failed security verdict refuses admission, label or not
       - check-success = check (22.19.0)
       - check-success = check (24)
 
