@@ -29,7 +29,11 @@ queue_rules:
       # fork-sync labels every upstream sync needs-security-pass, so syncs are exempted here too.
       - or:
           - -label = needs-security-pass
-          - head ~= ^sync/upstream-
+          # Only our own fork-sync branches, never an outside fork's same-named branch
+          # (head-repo-full-name, https://docs.mergify.com/configuration/conditions/).
+          - and:
+              - head ~= ^sync/upstream-
+              - head-repo-full-name = Smarty-Pants-Inc/pi-better-openai
           - check-success = review/security
       - check-success = check (22.19.0)
       - check-success = check (24)
