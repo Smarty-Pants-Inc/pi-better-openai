@@ -23,13 +23,17 @@ queue_rules:
       - -title ~= (?i)do not land
       - check-success = review/astra
       # A PR that needs a named security pass waits for review/security, which
-      # pi-better-openai-security-astra posts on the exact head (smarty-dev#806, #855);
-      # so does an automated upstream sync (smarty-dev#755).
+      # pi-better-openai-security-astra posts on the exact head (smarty-dev#806, #855).
+      # Kept until Paul's yes on the AGENTS.md clause (org interim 10-18 02:56Z).
+      # Upstream syncs no longer wait for review/security: R-no-security-slips, smarty-dev#2264 (org 10-18 02:28Z).
+      # fork-sync labels every upstream sync needs-security-pass, so syncs are exempted here too.
       - or:
           - -label = needs-security-pass
-          - check-success = review/security
-      - or:
-          - -head ~= ^sync/upstream-
+          # Only our own fork-sync branches, never an outside fork's same-named branch
+          # (head-repo-full-name, https://docs.mergify.com/configuration/conditions/).
+          - and:
+              - head ~= ^sync/upstream-
+              - head-repo-full-name = Smarty-Pants-Inc/pi-better-openai
           - check-success = review/security
       - check-success = check (22.19.0)
       - check-success = check (24)
