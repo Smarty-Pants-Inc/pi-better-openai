@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+
+- Add the classifier-only `openai-decisions` provider for API-billed Decisions alongside subscription-authenticated `openai` chat. Use `/login openai-decisions`, `OPENAI_DECISIONS_API_KEY`, or `OPENAI_API_KEY`; native adapters and chat credentials are preserved.
+- Remove the legacy `/fast` command and `--fast` flag; use `/openai-tier fast` or `/openai-tier standard`. Existing saved tier settings still load.
+- Enable API-key Ultrafast for GPT-6.1 Sol on global, US, and EU Responses endpoints; retain Astra's global/US restriction and subscription-auth safeguards.
+- Document generally available OpenAI Decisions and direct `openai/gpt-6-astra` selection, preserving native chat, classifier, and authentication implementations.
+- Add regression coverage for Sol Ultrafast eligibility and direct OpenAI model access alongside the legacy Codex provider.
+- Upgrade undici to 8.12.2 and pin patched Vite 8.2.4 to address high-severity security advisories.
+
 ## 0.2.13
 
 - Add a native OpenAI Decisions compatibility classifier for hosts without upstream support, preserving OpenAI chat/auth and deferring to the host adapter when available.

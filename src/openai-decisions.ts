@@ -1,8 +1,10 @@
-// Compatibility implementation of Pi's upstream OpenAI Decisions classifier.
-// Remove once the minimum supported Pi ships it. See THIRD_PARTY_NOTICES.md.
+// OpenAI Decisions compatibility classifier and independent API-key provider.
+// Remove the fallback once the minimum supported Pi ships it. See THIRD_PARTY_NOTICES.md.
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   calculateCost,
+  createProvider,
+  envApiKeyAuth,
   type ClassifierContext,
   type ClassifierModel,
   type ClassifierOptions,
@@ -371,9 +373,42 @@ export function withOpenAIDecisions(builtIn: Provider): Provider {
   };
 }
 
+// Keep API-billed classification separate from the host's subscription chat credential.
+export function createOpenAIDecisionsProvider(builtIn: Provider): Provider {
+  const native = withOpenAIDecisions(builtIn);
+  const model =
+    native
+      .getAllModels?.()
+      .find(
+        (m): m is ClassifierModel<string> =>
+          m.type === "classifier" &&
+          m.api === OPENAI_DECISIONS_API &&
+          m.id === OPENAI_DECISIONS_MODEL.id,
+      ) ?? OPENAI_DECISIONS_MODEL;
+  return createProvider({
+    id: "openai-decisions",
+    name: "OpenAI Decisions (API key only)",
+    baseUrl: model.baseUrl,
+    auth: {
+      apiKey: envApiKeyAuth("OpenAI Decisions API key", [
+        "OPENAI_DECISIONS_API_KEY",
+        "OPENAI_API_KEY",
+      ]),
+    },
+    models: [{ ...model, provider: "openai-decisions" }],
+    filterAllModels: (models, credential) => (credential?.type === "oauth" ? [] : models),
+    classifiers: {
+      [OPENAI_DECISIONS_API]: {
+        classify: (model, context, options) => native.classify!(model, context, options),
+      },
+    },
+  });
+}
+
 export function registerOpenAIDecisionsProvider(pi: ExtensionAPI): void {
   const builtIn = builtinProviders().find((provider) => provider.id === "openai");
   if (!builtIn) return;
   const provider = withOpenAIDecisions(builtIn);
   if (provider !== builtIn) pi.registerProvider(provider);
+  pi.registerProvider(createOpenAIDecisionsProvider(provider));
 }

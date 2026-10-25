@@ -346,7 +346,10 @@ describe("OpenAI Decisions compatibility", () => {
     expect(withOpenAIDecisions(upcoming)).toBe(upcoming);
     const registerProvider = vi.fn();
     registerOpenAIDecisionsProvider({ registerProvider } as unknown as ExtensionAPI);
-    expect(registerProvider).not.toHaveBeenCalled();
+    expect(registerProvider).toHaveBeenCalledOnce();
+    expect(registerProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "openai-decisions" }),
+    );
     expect(withOpenAIDecisions(current)).toBe(current);
   });
 

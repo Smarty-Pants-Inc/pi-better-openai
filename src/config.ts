@@ -678,7 +678,7 @@ export const DECISIONS_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] 
     currentValue: (cfg) => cfg.decisions.model,
     parse: stringSetting,
     description:
-      "Select with /openai-decisions use provider/model. OpenAI Decisions: openai/gpt-6-luna (API key only). Jev is also supported.",
+      "Select with /openai-decisions use provider/model. OpenAI Decisions: openai-decisions/gpt-6-luna (separate API key; keeps chat OAuth). Jev is also supported.",
   },
   {
     id: "decisions.timeoutMs",

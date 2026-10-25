@@ -20,7 +20,7 @@ pi install npm:@monotykamary/pi-better-openai
 
 ## Authentication
 
-Pi 1.0.2 supports **Sign in with ChatGPT** under `/login openai`, using the native Responses API at `api.openai.com`. Use `openai/*` models for that subscription login or an OpenAI API key; the extension preserves pi's native authentication and transport. Standard/Fast tier overrides work with both login methods on supported models.
+Pi 1.0.2 supports **Sign in with ChatGPT** under `/login openai`, using the native Responses API at `api.openai.com`. Select `/model openai/gpt-6-astra` (or `openai/gpt-6.1-sol`) for that subscription login or an OpenAI API key; the extension preserves pi's native authentication and transport. Standard/Fast tier overrides work with both login methods on supported models.
 
 Pi labels `openai-codex` **legacy**, but this extension's usage polling, banked resets, image generation, web search, and live voice still call separate `chatgpt.com/backend-api` endpoints. They require the legacy Codex login, not the new direct-OpenAI OAuth grant. Credentials are never copied or substituted between providers.
 
@@ -30,11 +30,29 @@ Pi labels `openai-codex` **legacy**, but this extension's usage polling, banked 
 4. If `PI_CODING_AGENT_DIR` is set, the auth store, global extension config, and global generated-image directory use that agent directory instead of `~/.pi/agent`. A leading `~/` is expanded to your home directory.
 5. When [pi-multiprovider](https://github.com/monotykamary/pi-multiprovider) 0.8.0+ pools several `openai-codex` accounts, the session's active **Codex** account (chosen with `/switch-account`) is resolved first for usage display, banked resets, image generation, web search, and live voice; the usage widget refreshes on Codex account switches and session restores. An independently selected `openai` account does not select the Codex backend account. Without that extension, credential resolution is unchanged.
 
+### Subscription chat with API-billed Decisions
+
+Keep your subscription login under `/login openai`. Store an independent OpenAI API key using **`/login openai-decisions`**, then select the classifier:
+
+```text
+/model openai/gpt-6-astra
+/login openai-decisions
+/openai-decisions use openai-decisions/gpt-6-luna
+```
+
+Enter the API key only in Pi's secret login prompt. Pi stores it under the separate `openai-decisions` credential entry in its auth store (normally `~/.pi/agent/auth.json`), leaving `openai` OAuth untouched. Do not put the key in this extension's config or commit it to the workspace.
+
+Alternatively, provide `OPENAI_DECISIONS_API_KEY` through your shell or secret manager before launching Pi; `OPENAI_API_KEY` is a fallback. A stored `openai-decisions` key takes precedence over both environment variables. The `openai` OAuth credential does not shadow this independent provider's key.
+
+Chat continues to use subscription OAuth; only explicitly requested Decisions calls use API billing. The separate provider has no chat/image models, no OAuth login, and never borrows `openai` or `openai-codex` credentials. If its key is missing, classification fails instead of falling back to subscription auth. `/openai-decisions off` disables the optional tool; direct codemode/Fabric calls remain independently available.
+
+Do **not** use `--api-key` for this split: it would switch the selected chat provider to API billing. Ultrafast chat remains API-key-only and is not enabled by configuring the separate Decisions key.
+
 ## Features
 
 - GPT-6.1 Sol, GPT-6 Astra, and Daybreak Blue/Red model fallbacks for the built-in `openai-codex` provider.
-- Standard, Fast, and capability-gated Ultrafast service tiers via `/openai-tier` or `/openai-settings`; `/fast` remains a quick Fast toggle.
-- Native OpenAI Decisions (`openai/gpt-6-luna`) through Pi's classifier API, codemode, and pi-fabric; optional bounded `openai_decide` tool also supports Jev.
+- Standard, Fast, and capability-gated Ultrafast service tiers via `/openai-tier` or `/openai-settings`.
+- Native OpenAI Decisions (`openai-decisions/gpt-6-luna` for separate API billing, or `openai/gpt-6-luna`) through Pi's classifier API, codemode, and pi-fabric; optional bounded `openai_decide` tool also supports Jev.
 - OpenAI subscription usage display via `/openai-usage` and the footer.
 - Interactive settings picker via `/openai-settings`.
 - Footer customization for model, thinking, fast mode, usage, and token/cost context.
@@ -43,7 +61,6 @@ Pi labels `openai-codex` **legacy**, but this extension's usage polling, banked 
 - Codex-backed realtime voice through `/live`, with an animated microphone waveform and coding-task delegation into the active pi session.
 - Animated Codex custom pets rendered in the Better OpenAI footer.
 - Commands:
-  - `/fast` toggles Fast and Standard; it never enables Ultrafast.
   - `/openai-tier [standard|fast|ultrafast]` shows or selects the requested service tier.
   - `/openai-decisions [models|use provider/model|off]` inspects or configures typed decisions.
   - `/openai-image <prompt>` generates an image directly.
@@ -145,9 +162,9 @@ Setting `image.enabled`, `websearch.enabled`, or `decisions.enabled` to `false` 
 
 ## Service tiers
 
-`/openai-tier fast` requests `service_tier: "priority"`. `/openai-tier standard` explicitly requests `"default"`, clearing an inherited Fast/Ultrafast request tier on OpenAI providers. Legacy disabled configurations without an explicit tier leave payloads untouched. `/fast` and the `--fast` flag never select Ultrafast.
+`/openai-tier fast` requests `service_tier: "priority"`. `/openai-tier standard` explicitly requests `"default"`, clearing an inherited Fast/Ultrafast request tier on OpenAI providers. Legacy disabled configurations without an explicit tier leave payloads untouched. The legacy `/fast` command and `--fast` flag have been removed; use `/openai-tier fast` or `/openai-tier standard` instead.
 
-`/openai-tier ultrafast` explicitly opts into **6x Standard token prices** for **API-key-authenticated** `openai/gpt-6-astra` over the Responses API. Only the documented global (`https://api.openai.com/v1`) and US (`https://us.api.openai.com/v1`) endpoints are enabled. EU/regional endpoints, custom proxies, other models, and ChatGPT subscription Ultrafast (both `openai` OAuth and legacy `openai-codex`) are not enabled without verified support. This does not promise account entitlement or available rate limits. Unsupported selections remain requested but inactive; the extension does not inject a lower-tier fallback or retry a rejected request.
+`/openai-tier ultrafast` explicitly opts into **6x Standard token prices** for **API-key-authenticated** `openai/gpt-6-astra` and `openai/gpt-6.1-sol` over the Responses API. Both support the documented global (`https://api.openai.com/v1`) and US (`https://us.api.openai.com/v1`) endpoints. Sol also supports the EU endpoint (`https://eu.api.openai.com/v1`); Astra does not. Other regional endpoints, custom proxies, other models, and ChatGPT subscription Ultrafast (both `openai` OAuth and legacy `openai-codex`) are not enabled without verified support. This does not promise account entitlement or available rate limits. Unsupported selections remain requested but inactive; the extension does not inject a lower-tier fallback or retry a rejected request.
 
 The footer shows `fast` or `ultrafast` only when supported by the current model. Diagnostics distinguish the requested tier and last injected payload from server-confirmed service or billing. **Pi's host cost estimates may omit the Ultrafast premium**; use OpenAI billing for actual charges. The host's native transport is preserved; WebSockets are recommended by OpenAI but HTTP is also supported. See [Ultrafast documentation](https://developers.openai.com/api/docs/guides/ultrafast-mode) and [pricing](https://developers.openai.com/api/docs/pricing?latest-pricing=ultrafast).
 
@@ -155,15 +172,15 @@ The footer shows `fast` or `ultrafast` only when supported by the current model.
 
 ## Typed decisions
 
-OpenAI's [Decisions API](https://developers.openai.com/api/docs/guides/decisions) is available as the native classifier `openai/gpt-6-luna`, **not a chat-completion fallback**. Pi 1.1.0 ships the adapter, including native codemode image classification. This extension supplies a compatibility implementation only when the host lacks one; a built-in Decisions adapter always wins. Native OpenAI chat models, authentication, and transport are preserved.
+OpenAI's [Decisions API](https://developers.openai.com/api/docs/guides/decisions) is generally available as the native classifier `openai/gpt-6-luna`, **not a chat-completion fallback**. Pi 1.1.0 ships the adapter, including native codemode image classification. This extension supplies a compatibility implementation only when the host lacks one; a built-in Decisions adapter always wins. Native OpenAI chat models, authentication, and transport are preserved.
 
-Use an **OpenAI API key** via `/login openai` or `OPENAI_API_KEY`. ChatGPT/Codex OAuth does not grant Decisions access. If `/login openai` stores OAuth, it takes precedence over the environment key: select the API-key login instead. No credentials are copied between providers. Catalog presence does not guarantee account entitlement.
+Use an **OpenAI API key** via `/login openai-decisions`, `OPENAI_DECISIONS_API_KEY`, or `OPENAI_API_KEY`. The classifier-only `openai-decisions` provider keeps that credential separate from `/login openai` subscription OAuth. It reuses the host Decisions adapter and metadata, with compatibility support on older hosts. The original `openai/gpt-6-luna` route still requires API-key authentication on `openai` itself; its stored OAuth takes precedence over environment keys. No credentials are copied between providers. Catalog presence does not guarantee account entitlement.
 
 The optional `openai_decide` tool is disabled by default and never chooses a provider automatically. To enable it:
 
 ```text
 /openai-decisions models
-/openai-decisions use openai/gpt-6-luna
+/openai-decisions use openai-decisions/gpt-6-luna
 ```
 
 Jev also works: select `typesafe/jev-latest` and configure `TYPESAFE_API_KEY` through Pi. The model list shows registered classifiers, not guaranteed credentials or entitlement. `/openai-decisions use` saves the selected model and enables decisions in the active project/global config; `/openai-decisions off` disables requests. These settings are independent of service-tier persistence. Provider-qualified IDs containing further slashes, such as `openrouter/typesafe/jev-1.13`, are supported when registered by the host. Prefer pinned versions for stable evaluations.
@@ -173,7 +190,7 @@ Jev also works: select `typesafe/jev-latest` and configure `TYPESAFE_API_KEY` th
 The same classifier is available through `models` in Pi's codemode and pi-fabric's `fabric_exec` (`tools.models` is a Fabric alias). These are direct native-model calls: they do **not** depend on `decisions.enabled` or use the optional tool's size/deadline limits. Disabling `openai_decide` does not disable the classifier catalog or direct model calls. Enable Pi codemode with `"defaultTools": ["+codemode"]`; Fabric users can use their existing execution tool.
 
 ```js
-const available = await models.getAvailableOfType("classifier", "openai");
+const available = await models.getAvailableOfType("classifier", "openai-decisions");
 const model = available.find((m) => m.id === "gpt-6-luna");
 if (!model) return "Configure an OpenAI API key with Decisions access.";
 const result = await models.classify(model, {

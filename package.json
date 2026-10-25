@@ -1,6 +1,6 @@
 {
   "name": "@monotykamary/pi-better-openai",
-  "version": "0.2.16",
+  "version": "0.3.0",
   "description": "Improve OpenAI in pi with fast mode, usage stats, realtime voice, image generation, and footer polish.",
   "keywords": [
     "fast",
@@ -61,7 +61,7 @@
     "https-proxy-agent": "9.1.0",
     "proxy-from-env": "2.1.0",
     "sharp": "0.35.5",
-    "undici": "8.10.2",
+    "undici": "8.12.2",
     "ws": "8.21.2"
   },
   "devDependencies": {
@@ -97,7 +97,8 @@
     "protobufjs": "7.6.5",
     "source-map-js": "1.2.2",
     "tinypool": "2.1.2",
-    "undici": "8.10.2"
+    "undici": "8.12.2",
+    "vite": "8.2.4"
   },
   "engines": {
     "node": ">=22.19.0"

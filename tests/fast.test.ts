@@ -203,7 +203,10 @@ describe("service tiers", () => {
 
   test.each([
     { provider: "openai-codex", id: "gpt-6-astra" },
-    { provider: "openai", id: "gpt-6.1-sol" },
+    { provider: "openai", id: "gpt-6-sol" },
+    { provider: "openai-codex", id: "gpt-6.1-sol" },
+    { provider: "openai", id: "gpt-6.1-sol", baseUrl: "https://proxy.example/v1" },
+    { provider: "openai", id: "gpt-6.1-sol", baseUrl: "https://ae.api.openai.com/v1" },
     { provider: "openai", id: "gpt-6-astra", baseUrl: "https://eu.api.openai.com/v1" },
     { provider: "openai", id: "gpt-6-astra", baseUrl: "https://proxy.example/v1" },
     { provider: "openai", id: "gpt-6-astra", baseUrl: "http://api.openai.com/v1" },
@@ -227,6 +230,28 @@ describe("service tiers", () => {
     },
   );
 
+  test.each([
+    "https://api.openai.com/v1",
+    "https://us.api.openai.com/v1/",
+    "https://eu.api.openai.com/v1",
+  ])("supports Sol Ultrafast with API keys at %s, but not OAuth", async (baseUrl) => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, { serviceTier: "ultrafast" });
+    const h = createHarness(cwd, {
+      ...createModel("openai", "gpt-6.1-sol")!,
+      baseUrl,
+    });
+    await emit(h, "session_start");
+    const payload = { model: "gpt-6.1-sol", input: [] };
+    expect(await beforeProviderRequest(h, payload)).toEqual({
+      ...payload,
+      service_tier: "ultrafast",
+    });
+    expect(payload).not.toHaveProperty("service_tier");
+    vi.mocked(h.ctx.modelRegistry.isUsingOAuth).mockReturnValue(true);
+    expect(await beforeProviderRequest(h, payload)).toBeUndefined();
+  });
+
   test("rechecks capability on model switches and never injects into a different payload model", async () => {
     const cwd = createTempProject();
     writeProjectConfig(cwd, { serviceTier: "ultrafast" });
@@ -246,24 +271,22 @@ describe("service tiers", () => {
     });
   });
 
-  test("persists a Fast flag override even when both old and new tiers are active", async () => {
+  test("only registers explicit tier controls and preserves the saved tier", async () => {
     const cwd = createTempProject();
-    writeProjectConfig(cwd, {
-      serviceTier: "ultrafast",
-      active: true,
-      desiredActive: true,
-      supportedModels: undefined,
-    });
+    writeProjectConfig(cwd, { serviceTier: "ultrafast", supportedModels: undefined });
     const h = createHarness(cwd, createModel("openai", "gpt-6-astra"));
-    vi.mocked(h.pi.getFlag).mockReturnValue(true);
     await emit(h, "session_start");
+    expect(h.commands.has("fast")).toBe(false);
+    expect(h.commands.has("openai-tier")).toBe(true);
+    expect(h.pi.registerFlag).not.toHaveBeenCalled();
+    expect(h.pi.getFlag).not.toHaveBeenCalled();
     expect(await beforeProviderRequest(h, { model: "gpt-6-astra" })).toMatchObject({
-      service_tier: "priority",
+      service_tier: "ultrafast",
     });
-    expect(readRawConfig(configPaths(cwd).project).serviceTier).toBe("fast");
+    expect(readRawConfig(configPaths(cwd).project).serviceTier).toBe("ultrafast");
   });
 
-  test("nonpersistent selection stays session-only and the Fast flag never selects Ultrafast", async () => {
+  test("nonpersistent selection stays session-only", async () => {
     const cwd = createTempProject();
     writeProjectConfig(cwd, {
       persistState: false,
@@ -278,24 +301,18 @@ describe("service tiers", () => {
       service_tier: "priority",
     });
     expect(readRawConfig(configPaths(cwd).project).serviceTier).toBe("ultrafast");
-    const flagged = createHarness(cwd, h.ctx.model);
-    vi.mocked(flagged.pi.getFlag).mockReturnValue(true);
-    await emit(flagged, "session_start");
-    expect(await beforeProviderRequest(flagged, { model: "gpt-6-astra" })).toMatchObject({
-      service_tier: "priority",
-    });
   });
 
-  test("/fast disables Ultrafast, then enables only Fast; invalid tiers do not change state", async () => {
+  test("explicit tiers replace Ultrafast; invalid tiers do not change state", async () => {
     const cwd = createTempProject();
     writeProjectConfig(cwd, { serviceTier: "ultrafast", supportedModels: undefined });
     const h = createHarness(cwd, createModel("openai", "gpt-6-astra"));
     await emit(h, "session_start");
-    await h.commands.get("fast")!.handler("", h.ctx);
+    await h.commands.get("openai-tier")!.handler("standard", h.ctx);
     expect(await beforeProviderRequest(h, { model: "gpt-6-astra" })).toMatchObject({
       service_tier: "default",
     });
-    await h.commands.get("fast")!.handler("", h.ctx);
+    await h.commands.get("openai-tier")!.handler("fast", h.ctx);
     await h.commands.get("openai-tier")!.handler("turbo", h.ctx);
     expect(await beforeProviderRequest(h, { model: "gpt-6-astra" })).toMatchObject({
       service_tier: "priority",
@@ -367,7 +384,7 @@ describe("fast mode provider injection", () => {
     expect(payload).toEqual({ model: "gpt-5.5" });
   });
 
-  test("/fast toggles injection on for the current supported model", async () => {
+  test("/openai-tier fast enables injection for the current supported model", async () => {
     const cwd = createTempProject();
     writeProjectConfig(cwd, {
       active: false,
@@ -377,7 +394,7 @@ describe("fast mode provider injection", () => {
     const harness = createHarness(cwd);
 
     await emit(harness, "session_start");
-    await harness.commands.get("fast")?.handler("", harness.ctx);
+    await harness.commands.get("openai-tier")!.handler("fast", harness.ctx);
 
     await expect(beforeProviderRequest(harness, { model: "gpt-5.5" })).resolves.toMatchObject({
       service_tier: "priority",

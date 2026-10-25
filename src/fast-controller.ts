@@ -3,7 +3,7 @@ import type { ResolvedConfig, ServiceTier, SupportedModel } from "./config.ts";
 import { isRecord } from "./config.ts";
 
 export const ULTRAFAST_NOTICE =
-  "Ultrafast uses 6x Standard token prices for API GPT-6 Astra (global/US only). ChatGPT subscription access (openai OAuth or legacy openai-codex) is not verified. Host cost estimates may exclude tier premiums.";
+  "Ultrafast uses 6x Standard token prices for API GPT-6 Astra (global/US) and GPT-6.1 Sol (global/US/EU). ChatGPT subscription access (openai OAuth or legacy openai-codex) is not verified. Host cost estimates may exclude tier premiums.";
 
 export function currentModelKey(ctx: ExtensionContext): string {
   return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none";
@@ -21,7 +21,7 @@ export function supportsUltrafast(ctx: ExtensionContext): boolean {
   const model = ctx.model;
   if (
     model?.provider !== "openai" ||
-    model.id !== "gpt-6-astra" ||
+    !["gpt-6-astra", "gpt-6.1-sol"].includes(model.id) ||
     model.api !== "openai-responses" ||
     ctx.modelRegistry.isUsingOAuth(model)
   )
@@ -33,7 +33,8 @@ export function supportsUltrafast(ctx: ExtensionContext): boolean {
       !url.username &&
       !url.password &&
       !url.port &&
-      ["api.openai.com", "us.api.openai.com"].includes(url.hostname) &&
+      (["api.openai.com", "us.api.openai.com"].includes(url.hostname) ||
+        (model.id === "gpt-6.1-sol" && url.hostname === "eu.api.openai.com")) &&
       /^\/v1\/?$/.test(url.pathname) &&
       !url.search &&
       !url.hash
@@ -95,15 +96,11 @@ export class FastController {
     this.active = this.desiredActive && supportsServiceTier(ctx, cfg, this.desiredTier);
   }
 
-  initializeForSession(ctx: ExtensionContext, cfg: ResolvedConfig, flagActive: boolean): void {
+  initializeForSession(ctx: ExtensionContext, cfg: ResolvedConfig): void {
     this.desiredTier = cfg.persistState
       ? (cfg.serviceTier ?? (cfg.desiredActive ? "fast" : "standard"))
       : "standard";
     this.explicitSelection = cfg.persistState && cfg.serviceTier !== undefined;
-    if (flagActive) {
-      this.desiredTier = "fast";
-      this.explicitSelection = true;
-    }
     this.applyDesiredState(ctx, cfg);
   }
 
