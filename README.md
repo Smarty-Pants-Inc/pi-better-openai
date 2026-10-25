@@ -63,6 +63,7 @@ Do **not** use `--api-key` for this split: it would switch the selected chat pro
 - Commands:
   - `/openai-tier [standard|fast|ultrafast]` shows or selects the requested service tier.
   - `/openai-decisions [models|use provider/model|off]` inspects or configures typed decisions.
+  - Both commands offer argument autocomplete; after `/openai-decisions use `, suggestions come from the current classifier catalog (including models without credentials). Completing an argument does not enable tools, make API requests, or change settings.
   - `/openai-image <prompt>` generates an image directly.
   - `/openai-websearch <query>` searches the web and inserts the cited answer into the session.
   - `/live` starts or stops realtime voice mode. `Ctrl+Shift+L` is the keyboard toggle.

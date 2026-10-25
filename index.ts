@@ -19,6 +19,7 @@ import {
 import type { Usage } from "@earendil-works/pi-ai";
 import { registerOpenAICodexModels } from "./src/codex-models.ts";
 import { registerOpenAIDecisionsProvider } from "./src/openai-decisions.ts";
+import { openAITierArgumentCompletions } from "./src/command-completions.ts";
 import { CONFIG_BASENAME, STATUS_KEY } from "./src/identity.ts";
 import {
   CODEX_PROVIDER_ID,
@@ -528,6 +529,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
 
   pi.registerCommand("openai-tier", {
     description: "Select standard, fast, or ultrafast (API Astra/Sol; 6x Standard token prices)",
+    getArgumentCompletions: openAITierArgumentCompletions,
     handler: async (args, ctx) => {
       const tier = args.trim().toLowerCase();
       if (!tier) {

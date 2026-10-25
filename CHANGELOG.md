@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Add argument autocomplete for `/openai-tier` and `/openai-decisions`, including live registered classifier suggestions after `use`. Completion does not change settings or call providers.
+
 ## 0.3.0
 
 - Add the classifier-only `openai-decisions` provider for API-billed Decisions alongside subscription-authenticated `openai` chat. Use `/login openai-decisions`, `OPENAI_DECISIONS_API_KEY`, or `OPENAI_API_KEY`; native adapters and chat credentials are preserved.

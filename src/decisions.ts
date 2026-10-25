@@ -14,6 +14,7 @@ import {
   type ResolvedConfig,
 } from "./config.ts";
 import { registerOptionalTool, type OptionalTool } from "./optional-tool.ts";
+import { openAIDecisionsArgumentCompletions } from "./command-completions.ts";
 
 export const OPENAI_DECIDE_TOOL = "openai_decide";
 export const OPENAI_DECISIONS_COMMAND = "openai-decisions";
@@ -337,6 +338,11 @@ export function registerOpenAIDecisions(
   getConfig: (ctx: ExtensionContext) => ResolvedConfig,
   refreshConfig: (ctx: ExtensionContext) => ResolvedConfig,
 ): OptionalTool {
+  let modelRegistry: ExtensionContext["modelRegistry"] | undefined;
+  pi.on("session_start", (_event, ctx) => {
+    modelRegistry = ctx.modelRegistry;
+  });
+
   function save(ctx: ExtensionContext, patch: DecisionsConfig): void {
     const cfg = refreshConfig(ctx);
     const raw = readRawConfig(cfg.configPath);
@@ -349,6 +355,11 @@ export function registerOpenAIDecisions(
 
   pi.registerCommand(OPENAI_DECISIONS_COMMAND, {
     description: "Configure opt-in native decisions: models | use provider/model | off",
+    getArgumentCompletions: (prefix) =>
+      openAIDecisionsArgumentCompletions(
+        prefix,
+        () => modelRegistry?.getModelsOfType("classifier") ?? [],
+      ),
     handler: async (args, ctx) => {
       const arg = args.trim();
       if (arg === "off") {

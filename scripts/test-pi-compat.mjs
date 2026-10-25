@@ -90,6 +90,16 @@ try {
   const errors = [];
   session.extensionRunner.onError((error) => errors.push(error));
   await session.bindExtensions({});
+  const commands = loaded.extensions[0].commands;
+  const tierCompletions = await commands.get("openai-tier").getArgumentCompletions("ultra");
+  assert.equal(tierCompletions[0].value, "ultrafast");
+  const modelCompletions = await commands
+    .get("openai-decisions")
+    .getArgumentCompletions("use openai-d");
+  assert.deepEqual(
+    modelCompletions.map((item) => item.value),
+    ["use openai-decisions/gpt-6-luna"],
+  );
   assert.equal(modelRuntime.getProvider("openai")?.auth?.oauth?.isSubscription, true);
   assert.match(modelRuntime.getProvider("openai-codex")?.name ?? "", /legacy/i);
   const decisionsModel = modelRuntime.getModelOfType("classifier", "openai", "gpt-6-luna");
