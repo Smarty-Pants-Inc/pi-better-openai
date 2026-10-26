@@ -3,8 +3,27 @@
 ## Unreleased (Smarty fork)
 
 - **Typed decisions are disabled in this fork** (smarty-dev#3155): `openai_decide`, `/openai-decisions` and the Typed decisions settings section are not registered, because Pi's confirmation UI cannot yet show a complete request safely. Legacy `decisions.*` settings still load and have no effect.
-- Do not ship upstream's native OpenAI Decisions compatibility adapter (smarty-dev#3155).
+- Do not ship upstream's native OpenAI Decisions compatibility adapter (smarty-dev#3155). Package exclusions cover both `src/decisions.ts` and `src/openai-decisions.ts`.
 - The unregistered decisions module (`src/decisions.ts`) stays in the repository but is **not published** in the package (`files` excludes it), so no consumer can import it and re-register the tool. It keeps a per-call confirmation that previews the complete request or refuses it (interactive sessions only; the headless opt-in `decisions.allowWithoutConfirmation: true` skips it), and a credential-availability filter, for when the feature returns.
+- Pin development hosts to Pi 1.3.0; retain the isolated real-host smoke path for upstream Pi 1.2.0 and the installed fleet runtime. Only fleet mode permits legacy direct-OpenAI API omissions.
+- Retain fork dependency security overrides, including undici 8.12.2 and Vite 8.2.4.
+
+## 0.3.1
+
+_Historical upstream release notes. In this fork, typed decisions are disabled (see Unreleased)._
+
+- Add argument autocomplete for `/openai-tier` and `/openai-decisions`, including live registered classifier suggestions after `use`. Completion does not change settings or call providers.
+
+## 0.3.0
+
+_Historical upstream release notes. In this fork, typed decisions are disabled (see Unreleased)._
+
+- Add the classifier-only `openai-decisions` provider for API-billed Decisions alongside subscription-authenticated `openai` chat. Use `/login openai-decisions`, `OPENAI_DECISIONS_API_KEY`, or `OPENAI_API_KEY`; native adapters and chat credentials are preserved.
+- Remove the legacy `/fast` command and `--fast` flag; use `/openai-tier fast` or `/openai-tier standard`. Existing saved tier settings still load.
+- Enable API-key Ultrafast for GPT-6.1 Sol on global, US, and EU Responses endpoints; retain Astra's global/US restriction and subscription-auth safeguards.
+- Document generally available OpenAI Decisions and direct `openai/gpt-6-astra` selection, preserving native chat, classifier, and authentication implementations.
+- Add regression coverage for Sol Ultrafast eligibility and direct OpenAI model access alongside the legacy Codex provider.
+- Upgrade undici to 8.12.2 and pin patched Vite 8.2.4 to address high-severity security advisories.
 
 ## 0.2.13
 

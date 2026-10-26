@@ -18,6 +18,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { Usage } from "@earendil-works/pi-ai";
 import { registerOpenAICodexModels } from "./src/codex-models.ts";
+import { openAITierArgumentCompletions } from "./src/command-completions.ts";
 import { CONFIG_BASENAME, STATUS_KEY } from "./src/identity.ts";
 import {
   CHATGPT_PROVIDER_IDS,
@@ -172,11 +173,9 @@ class DynamicBorder {
   }
 }
 
-const COMMAND = "fast";
 const OPENAI_STATUS_COMMAND = "openai-usage";
 const OPENAI_SETTINGS_COMMAND = "openai-settings";
 const OPENAI_RESETS_COMMAND = "openai-resets";
-const FLAG = "fast";
 const PET_EMPTY_VALUE = "not selected";
 const SERVICE_TIER = "priority";
 type SettingsPickerItem = {
@@ -374,18 +373,6 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     return refresh(ctx);
   }
 
-  function setActive(ctx: ExtensionContext, next: boolean): void {
-    const nextConfig = refresh(ctx);
-    fastController.setDesired(ctx, nextConfig, next);
-    persist(nextConfig);
-    updateFooter(ctx);
-    if (next && !fastController.active) {
-      ctx.ui.notify(fastController.unsupportedRequestMessage(ctx, nextConfig), "warning");
-      return;
-    }
-    ctx.ui.notify(fastController.stateText(ctx, nextConfig), "info");
-  }
-
   function addFooterUsage(usage: Usage | undefined): void {
     if (!usage) return;
     footerTotals.input += usage.input;
@@ -439,12 +426,6 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     cachedSessionNameLeafId = undefined;
     cachedSessionName = undefined;
   }
-
-  pi.registerFlag(FLAG, {
-    description: "Start with OpenAI fast mode enabled (service_tier=priority)",
-    type: "boolean",
-    default: false,
-  });
 
   function formatDebugStatus(ctx: ExtensionContext): string {
     const cfg = config(ctx);
@@ -549,17 +530,9 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     }
   }
 
-  pi.registerCommand(COMMAND, {
-    description: "Toggle OpenAI fast mode",
-    handler: async (args, ctx) => {
-      const arg = args.trim().toLowerCase();
-      if (!arg) return setActive(ctx, !fastController.desiredActive);
-      ctx.ui.notify("Usage: /fast", "error");
-    },
-  });
-
   pi.registerCommand("openai-tier", {
-    description: "Select standard, fast, or ultrafast (API Astra; 6x Standard token prices)",
+    description: "Select standard, fast, or ultrafast (API Astra/Sol; 6x Standard token prices)",
+    getArgumentCompletions: openAITierArgumentCompletions,
     handler: async (args, ctx) => {
       const tier = args.trim().toLowerCase();
       if (!tier) {
@@ -1492,7 +1465,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     invalidateSessionName();
     multiproviderRefreshCtx = ctx;
     const nextConfig = refresh(ctx);
-    fastController.initializeForSession(ctx, nextConfig, pi.getFlag(FLAG) === true);
+    fastController.initializeForSession(ctx, nextConfig);
     if (
       fastController.desiredActive !== nextConfig.desiredActive ||
       fastController.active !== nextConfig.active ||
