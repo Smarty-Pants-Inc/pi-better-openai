@@ -6,7 +6,18 @@ A pi extension for OpenAI subscription workflows: fast mode, usage visibility, f
 
 Requires Node.js 22.19.0 or newer.
 
-Compatibility: `bun run test:pi` checks pinned Pi 1.1.0; `PI_COMPAT_RUNTIME=/path/to/node_modules bun run test:pi:fleet` checks the installed Pi packages on fleet hosts and in the canary gate (not hosted CI, which has no reproducible fleet-runtime acquisition).
+Compatibility smoke commands (isolated synthetic credentials; no network requests):
+
+```bash
+# Pinned development host: Pi 1.3.0
+bun run test:pi
+# Separately installed upstream Pi 1.2.0, without changing this project's lockfile
+PI_COMPAT_RUNTIME=/path/to/pi-1.2/node_modules PI_COMPAT_EXPECT_VERSION=1.2.0 bun run test:pi
+# Installed fleet host (legacy direct-OpenAI API omissions allowed only in this mode)
+PI_COMPAT_RUNTIME=/path/to/fleet/node_modules bun run test:pi:fleet
+```
+
+External upstream hosts run the same subscription/API-key isolation checks as the pinned host. `PI_COMPAT_EXPECT_VERSION` is required for an external upstream host and can also version-check a fleet host. Fleet smoke runs on fleet hosts and in the canary gate, not hosted CI, which has no reproducible fleet-runtime acquisition.
 
 Install from GitHub:
 
@@ -22,7 +33,7 @@ pi install npm:@monotykamary/pi-better-openai
 
 ## Authentication
 
-Pi 1.0.2 supports **Sign in with ChatGPT** under `/login openai`, using the native Responses API at `api.openai.com`. Use `openai/*` models for that subscription login or an OpenAI API key; the extension preserves pi's native authentication and transport. Standard/Fast tier overrides work with both login methods on supported models.
+Pi 1.0.2 supports **Sign in with ChatGPT** under `/login openai`, using the native Responses API at `api.openai.com`. Select `/model openai/gpt-6-astra` (or `openai/gpt-6.1-sol`) for that subscription login or an OpenAI API key; the extension preserves pi's native authentication and transport. Standard/Fast tier overrides work with both login methods on supported models.
 
 Pi labels `openai-codex` **legacy**, but this extension's usage polling, banked resets, image generation, and web search still call separate `chatgpt.com/backend-api` endpoints. They require the legacy Codex login, not the new direct-OpenAI OAuth grant. Credentials are never copied or substituted between providers.
 
@@ -35,7 +46,7 @@ Pi labels `openai-codex` **legacy**, but this extension's usage polling, banked 
 ## Features
 
 - GPT-6.1 Sol, GPT-6 Astra, and Daybreak Blue/Red model fallbacks for the built-in `openai-codex` provider.
-- Standard, Fast, and capability-gated Ultrafast service tiers via `/openai-tier` or `/openai-settings`; `/fast` remains a quick Fast toggle.
+- Standard, Fast, and capability-gated Ultrafast service tiers via `/openai-tier` or `/openai-settings`.
 - OpenAI subscription usage display via `/openai-usage` and the footer.
 - Interactive settings picker via `/openai-settings`.
 - Footer customization for model, thinking, fast mode, usage, and token/cost context.
@@ -43,8 +54,8 @@ Pi labels `openai-codex` **legacy**, but this extension's usage polling, banked 
 - Live web search through the `openai_websearch` tool and `/openai-websearch` command, backed by the ChatGPT Codex search backend.
 - Animated Codex custom pets rendered in the Better OpenAI footer.
 - Commands:
-  - `/fast` toggles Fast and Standard; it never enables Ultrafast.
   - `/openai-tier [standard|fast|ultrafast]` shows or selects the requested service tier.
+  - `/openai-tier` offers argument autocomplete without changing settings or making API requests.
   - `/openai-image <prompt>` generates an image directly.
   - `/openai-websearch <query>` searches the web and inserts the cited answer into the session.
   - `/pets [help|list|wake [slug]|tuck|select <slug>]` renders or manages custom pets from `${CODEX_HOME:-~/.codex}/pets`.
@@ -140,9 +151,9 @@ Setting `image.enabled` or `websearch.enabled` to `false` hides that tool and re
 
 ## Service tiers
 
-`/openai-tier fast` requests `service_tier: "priority"`. `/openai-tier standard` explicitly requests `"default"`, clearing an inherited Fast/Ultrafast request tier on OpenAI providers. Legacy disabled configurations without an explicit tier leave payloads untouched. `/fast` and the `--fast` flag never select Ultrafast.
+`/openai-tier fast` requests `service_tier: "priority"`. `/openai-tier standard` explicitly requests `"default"`, clearing an inherited Fast/Ultrafast request tier on OpenAI providers. Legacy disabled configurations without an explicit tier leave payloads untouched. The legacy `/fast` command and `--fast` flag have been removed; use `/openai-tier fast` or `/openai-tier standard` instead.
 
-`/openai-tier ultrafast` explicitly opts into **6x Standard token prices** for **API-key-authenticated** `openai/gpt-6-astra` over the Responses API. Only the documented global (`https://api.openai.com/v1`) and US (`https://us.api.openai.com/v1`) endpoints are enabled. EU/regional endpoints, custom proxies, other models, and ChatGPT subscription Ultrafast (both `openai` OAuth and legacy `openai-codex`) are not enabled without verified support. This does not promise account entitlement or available rate limits. Unsupported selections remain requested but inactive; the extension does not inject a lower-tier fallback or retry a rejected request.
+`/openai-tier ultrafast` explicitly opts into **6x Standard token prices** for **API-key-authenticated** `openai/gpt-6-astra` and `openai/gpt-6.1-sol` over the Responses API. Both support the documented global (`https://api.openai.com/v1`) and US (`https://us.api.openai.com/v1`) endpoints. Sol also supports the EU endpoint (`https://eu.api.openai.com/v1`); Astra does not. Other regional endpoints, custom proxies, other models, and ChatGPT subscription Ultrafast (both `openai` OAuth and legacy `openai-codex`) are not enabled without verified support. This does not promise account entitlement or available rate limits. Unsupported selections remain requested but inactive; the extension does not inject a lower-tier fallback or retry a rejected request.
 
 The footer shows `fast` or `ultrafast` only when supported by the current model. Diagnostics distinguish the requested tier and last injected payload from server-confirmed service or billing. **Pi's host cost estimates may omit the Ultrafast premium**; use OpenAI billing for actual charges. The host's native transport is preserved; WebSockets are recommended by OpenAI but HTTP is also supported. See [Ultrafast documentation](https://developers.openai.com/api/docs/guides/ultrafast-mode) and [pricing](https://developers.openai.com/api/docs/pricing?latest-pricing=ultrafast).
 
@@ -150,7 +161,7 @@ The footer shows `fast` or `ultrafast` only when supported by the current model.
 
 ## Typed decisions
 
-Typed decisions (openai_decide, /openai-decisions) are disabled in this fork: the Pi confirmation UI cannot yet show a complete request safely. Tracked in smarty-dev#3155.
+Typed decisions (`openai_decide`, `/openai-decisions`, and their settings UI) are disabled in this fork: the Pi confirmation UI cannot yet show a complete request safely. Tracked in smarty-dev#3155. Legacy `decisions.*` settings cannot re-enable them. The package excludes both `src/decisions.ts` and `src/openai-decisions.ts`; this extension registers no Decisions provider or compatibility adapter and never borrows chat credentials for classification. Pi's own native classifier catalog is unchanged.
 
 ## Codex model fallbacks
 

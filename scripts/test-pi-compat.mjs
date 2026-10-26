@@ -6,8 +6,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const runtime = process.env.PI_COMPAT_RUNTIME;
-if (process.argv.includes("--fleet"))
+const fleet = process.argv.includes("--fleet");
+const expectedVersion = process.env.PI_COMPAT_EXPECT_VERSION;
+if (fleet)
   assert.ok(runtime, "test:pi:fleet requires PI_COMPAT_RUNTIME pointing to fleet node_modules");
+else if (runtime)
+  assert.ok(expectedVersion, "external upstream hosts require PI_COMPAT_EXPECT_VERSION");
 const host = runtime
   ? pathToFileURL(
       createRequire(import.meta.url).resolve(resolve(runtime, "@earendil-works/pi-coding-agent")),
@@ -15,10 +19,22 @@ const host = runtime
   : "@earendil-works/pi-coding-agent";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const home = await mkdtemp(join(tmpdir(), "pi-extension-compat-"));
-const previousHome = process.env.PI_CODING_AGENT_DIR;
+const previousEnv = process.env;
 const previousFetch = globalThis.fetch;
-process.env.PI_CODING_AGENT_DIR = home;
-globalThis.fetch = async () => new Response("", { status: 503 });
+// Do not inherit provider keys, shell credential commands, proxy settings, or real home paths.
+process.env = {
+  PATH: previousEnv.PATH ?? "",
+  HOME: home,
+  USERPROFILE: home,
+  XDG_CONFIG_HOME: join(home, "config"),
+  XDG_CACHE_HOME: join(home, "cache"),
+  PI_CODING_AGENT_DIR: home,
+};
+let blockedRequests = 0;
+globalThis.fetch = async () => {
+  blockedRequests += 1;
+  return new Response("", { status: 503 });
+};
 let session;
 try {
   const {
@@ -30,7 +46,9 @@ try {
     VERSION,
   } = await import(host);
   if (!runtime)
-    assert.equal(VERSION, "1.1.0", "test the actual pinned Pi host, not a stale override");
+    assert.equal(VERSION, "1.3.0", "test the actual pinned Pi host, not a stale override");
+  if (expectedVersion)
+    assert.equal(VERSION, expectedVersion, "test the explicitly requested Pi host version");
   const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   for (const name of [
     "@earendil-works/pi-ai",
@@ -124,6 +142,12 @@ try {
   const errors = [];
   session.extensionRunner.onError((error) => errors.push(error));
   await session.bindExtensions({});
+  const tierCommand = loaded.extensions
+    .map((extension) => extension.commands.get("openai-tier"))
+    .find(Boolean);
+  assert.ok(tierCommand, "openai-tier: command must register");
+  const tierCompletions = await tierCommand.getArgumentCompletions("ultra");
+  assert.equal(tierCompletions[0].value, "ultrafast");
   assert.equal(
     modelRuntime.getRegisteredProviderIds().includes("openai"),
     false,
@@ -133,8 +157,14 @@ try {
     modelRuntime.getModel("openai-codex", "gpt-6.1-sol"),
     "legacy fallback models remain registered",
   );
-  // Direct-OpenAI subscription auth was added in upstream Pi 1.x, not fleet Pi 0.87.1.
-  if (!runtime) {
+  assert.equal(
+    modelRuntime.getRegisteredProviderIds().includes("openai-decisions"),
+    false,
+    "the fork must not register a separate Decisions provider",
+  );
+  // Only fleet mode may omit APIs absent from legacy fleet Pi (0.87.1).
+  // External upstream 1.2/1.3 hosts must pass these checks too.
+  if (!fleet) {
     assert.equal(modelRuntime.getProvider("openai")?.auth?.oauth?.isSubscription, true);
     assert.match(modelRuntime.getProvider("openai-codex")?.name ?? "", /legacy/i);
     // The host hides its OpenAI Decisions classifier from ChatGPT OAuth.
@@ -157,17 +187,47 @@ try {
     const openaiModel = modelRuntime.getModel("openai", "gpt-6-astra");
     assert.equal(openaiModel?.api, "openai-responses");
     assert.equal(openaiModel?.baseUrl, "https://api.openai.com/v1");
+    for (const id of ["gpt-6-astra", "gpt-6.1-sol"]) {
+      assert.ok(
+        (await modelRuntime.getAvailableOfType("chat", "openai")).some(
+          (model) => model.id === id && model.api === "openai-responses",
+        ),
+        `${id}: direct OpenAI subscription models must remain available without Codex auth`,
+      );
+    }
     await modelRuntime.setRuntimeApiKey("openai", "synthetic-api-key");
     assert.equal(
       modelRuntime.isUsingOAuth("openai"),
       false,
       "API key overrides must remain API-only",
     );
+    assert.equal(modelRuntime.isUsingSubscription("openai"), false);
+    assert.equal((await modelRuntime.getAuth("openai"))?.auth.apiKey, "synthetic-api-key");
+    assert.equal(
+      await modelRuntime.getAuth("openai-codex"),
+      undefined,
+      "OpenAI API keys are not Codex backend auth",
+    );
+    for (const id of ["gpt-6-astra", "gpt-6.1-sol"]) {
+      assert.ok(
+        (await modelRuntime.getAvailableOfType("chat", "openai")).some(
+          (model) => model.id === id && model.baseUrl === "https://api.openai.com/v1",
+        ),
+        `${id}: API-key access must stay on the native OpenAI route`,
+      );
+    }
     await modelRuntime.removeRuntimeApiKey("openai");
     assert.equal(modelRuntime.isUsingOAuth("openai"), true);
+    assert.equal(modelRuntime.isUsingSubscription("openai"), true);
+    assert.equal(
+      (await modelRuntime.getAuth("openai"))?.auth.apiKey,
+      "synthetic-openai-subscription-token",
+      "removing an API-key override must restore the original subscription identity",
+    );
   }
   await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
   assert.deepEqual(errors, [], "real session startup and shutdown must succeed");
+  assert.equal(blockedRequests, 0, "the isolated smoke must not attempt provider network requests");
   const names = new Set();
   for (const extension of loaded.extensions) {
     for (const [name, { definition }] of extension.tools) {
@@ -189,15 +249,17 @@ try {
     "Decisions tool must not be installed in the real session",
   );
   console.log(
-    `${manifest.name}: Pi ${VERSION}${runtime ? ` (${resolve(runtime)})` : " (pinned)"} warning-free manifest load; ${loaded.extensions.length} extensions, ${names.size} tools registered; openai-websearch/openai-image commands registered; legacy Decisions config ignored, tool/command absent${runtime ? "" : "; OpenAI subscription/API-key auth isolation verified"}`,
+    `${manifest.name}: Pi ${VERSION}${runtime ? ` (${resolve(runtime)})` : " (pinned)"} warning-free manifest load; ${loaded.extensions.length} extensions, ${names.size} tools registered; openai-websearch/openai-image commands registered; legacy Decisions config ignored, tool/command absent${fleet ? "; fleet mode: legacy direct-OpenAI checks omitted" : "; OpenAI subscription/API-key auth isolation verified"}; ${blockedRequests} fetch attempts blocked, no network sent`,
   );
 } finally {
-  if (session) {
-    await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-    session.dispose();
+  try {
+    if (session) {
+      await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+      session.dispose();
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env = previousEnv;
+    await rm(home, { recursive: true, force: true });
   }
-  globalThis.fetch = previousFetch;
-  if (previousHome === undefined) delete process.env.PI_CODING_AGENT_DIR;
-  else process.env.PI_CODING_AGENT_DIR = previousHome;
-  await rm(home, { recursive: true, force: true });
 }
